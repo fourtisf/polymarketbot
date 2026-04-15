@@ -55,18 +55,112 @@ class Executor:
             log.error("py-clob-client not installed — live trading disabled")
             return None
 
-        creds = ApiCreds(
-            api_key=config.POLYMARKET_API_KEY,
-            api_secret=config.POLYMARKET_API_SECRET,
-            api_passphrase=config.POLYMARKET_PASSPHRASE,
-        )
-        self._client = ClobClient(
-            host=config.CLOB_HOST,
-            key=config.POLYGON_PRIVATE_KEY,
-            chain_id=config.POLYGON_CHAIN_ID,
-            creds=creds,
-        )
+        if not config.POLYGON_PRIVATE_KEY:
+            log.error("POLYGON_PRIVATE_KEY not set — cannot init CLOB client")
+            return None
+
+        has_creds = all([
+            config.POLYMARKET_API_KEY,
+            config.POLYMARKET_API_SECRET,
+            config.POLYMARKET_PASSPHRASE,
+        ])
+
+        try:
+            if has_creds:
+                creds = ApiCreds(
+                    api_key=config.POLYMARKET_API_KEY,
+                    api_secret=config.POLYMARKET_API_SECRET,
+                    api_passphrase=config.POLYMARKET_PASSPHRASE,
+                )
+                self._client = ClobClient(
+                    host=config.CLOB_HOST,
+                    key=config.POLYGON_PRIVATE_KEY,
+                    chain_id=config.POLYGON_CHAIN_ID,
+                    creds=creds,
+                )
+                log.info("CLOB client initialized with provided API creds")
+            else:
+                # Derive API creds from the private key (Level-1 auth)
+                log.warning(
+                    "POLYMARKET_API_* not set — deriving API creds from private key"
+                )
+                tmp = ClobClient(
+                    host=config.CLOB_HOST,
+                    key=config.POLYGON_PRIVATE_KEY,
+                    chain_id=config.POLYGON_CHAIN_ID,
+                )
+                derived = tmp.create_or_derive_api_creds()
+                tmp.set_api_creds(derived)
+                self._client = tmp
+                log.info("CLOB client initialized with derived API creds")
+        except Exception as exc:
+            log.exception("failed to init CLOB client: %s", exc)
+            self._client = None
+            return None
         return self._client
+
+    # ── Approvals ────────────────────────────────────────────
+    async def ensure_approvals(self) -> bool:
+        """
+        On LIVE startup, ensure USDC (COLLATERAL) and CTF (CONDITIONAL)
+        allowances are set for the Polymarket Exchange. Uses
+        py-clob-client's update_balance_allowance which triggers on-chain
+        approvals for EOA wallets.
+        """
+        if self.dry_run:
+            log.info("dry-run: skipping Polymarket approvals")
+            return True
+        client = self._init_client()
+        if client is None:
+            log.error("approvals: CLOB client unavailable")
+            return False
+
+        try:
+            from py_clob_client.clob_types import BalanceAllowanceParams, AssetType
+        except ImportError:
+            log.error("approvals: BalanceAllowanceParams import failed")
+            return False
+
+        def _check_and_set():
+            results = {}
+            # 1. USDC collateral allowance
+            col_params = BalanceAllowanceParams(asset_type=AssetType.COLLATERAL)
+            bal = client.get_balance_allowance(col_params)
+            log.info("approvals: USDC balance/allowance = %s", bal)
+            allowance = 0.0
+            if isinstance(bal, dict):
+                try:
+                    allowance = float(bal.get("allowance", 0) or 0)
+                except (TypeError, ValueError):
+                    allowance = 0.0
+            if allowance <= 0:
+                log.info("approvals: updating USDC allowance...")
+                client.update_balance_allowance(col_params)
+                results["usdc"] = "updated"
+            else:
+                results["usdc"] = f"ok ({allowance})"
+
+            # 2. CTF conditional allowance — approve once for proxy,
+            # for EOA we need to pass a token_id but the on-chain approval
+            # is per-operator (CTF.setApprovalForAll), so any token works.
+            cond_params = BalanceAllowanceParams(
+                asset_type=AssetType.CONDITIONAL,
+                token_id="0",
+            )
+            try:
+                client.update_balance_allowance(cond_params)
+                results["ctf"] = "updated"
+            except Exception as exc:
+                results["ctf"] = f"err:{exc}"
+            return results
+
+        try:
+            results = await asyncio.to_thread(_check_and_set)
+            log.info("approvals complete: %s", results)
+            return True
+        except Exception as exc:
+            log.exception("approvals failed: %s", exc)
+            return False
 
     # ── Public API ───────────────────────────────────────────
     async def place_limit_buy(
@@ -139,11 +233,24 @@ class Executor:
         try:
             resp = await asyncio.to_thread(_post)
         except Exception as exc:
-            log.exception("post_order failed: %s", exc)
-            return FillResult(success=False, error=str(exc))
+            err_detail = str(exc)
+            resp_attr = getattr(exc, "response", None)
+            if resp_attr is not None:
+                try:
+                    err_detail = f"{exc} | body={resp_attr.text[:300]}"
+                except Exception:
+                    pass
+            log.error("post_order failed (token=%s price=%.3f sh=%d): %s",
+                      token_id[:10], price, shares, err_detail)
+            return FillResult(success=False, error=err_detail)
 
+        log.info("post_order resp: %s", resp)
         if not isinstance(resp, dict):
             return FillResult(success=False, error=f"unexpected resp: {resp}")
+        if resp.get("errorMsg") or resp.get("error"):
+            err = resp.get("errorMsg") or resp.get("error")
+            log.error("CLOB rejected order: %s", err)
+            return FillResult(success=False, error=str(err))
         order_id = resp.get("orderID") or resp.get("order_id") or ""
         status = resp.get("status", "")
         filled = float(resp.get("filled", 0) or 0)

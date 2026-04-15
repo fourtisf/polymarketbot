@@ -66,7 +66,7 @@ TELEGRAM_CHAT_ID = _env("TELEGRAM_CHAT_ID")
 # ─────────────────────────────────────────────────────────────
 # Dashboard
 # ─────────────────────────────────────────────────────────────
-DASHBOARD_PORT = _env_int("DASHBOARD_PORT", 8080)
+DASHBOARD_PORT = _env_int("DASHBOARD_PORT", 8081)
 DASHBOARD_TOKEN = _env("DASHBOARD_TOKEN", "changeme")
 STARTING_BALANCE = _env_float("STARTING_BALANCE", 200.0)
 

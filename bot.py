@@ -140,6 +140,17 @@ class TradingBot:
 
         await self.dashboard.start()
 
+        # Polymarket approvals (USDC + CTF) — only in LIVE mode
+        if not self.dry_run:
+            log.info("checking Polymarket approvals...")
+            ok = await self.executor.ensure_approvals()
+            if not ok:
+                await self.notifier.send_text(
+                    "⚠️ Polymarket approvals failed — orders may be rejected. Check logs."
+                )
+            else:
+                log.info("Polymarket approvals OK")
+
         # Main trading loop
         self._tasks.append(asyncio.create_task(self._trading_loop(), name="trading"))
         self._tasks.append(asyncio.create_task(self._live_state_loop(), name="live_state"))

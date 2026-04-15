@@ -83,7 +83,7 @@ Available commands:
 After the bot starts, visit:
 
 ```
-http://YOUR_VPS_IP:8080
+http://YOUR_VPS_IP:8081
 ```
 
 You'll be prompted for your `DASHBOARD_TOKEN` (from `.env`). The dashboard auto-refreshes via
