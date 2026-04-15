@@ -1,0 +1,118 @@
+"""
+Binance BTC/USDT live trade feed.
+
+Subscribes to btcusdt@trade and maintains:
+  - last_price: most recent trade price (float)
+  - last_price_ts: timestamp of last price (epoch seconds)
+  - trades_window: rolling list of trades from last 60 seconds
+    (used to classify volume: high / normal / low)
+
+Consumers ask binance.get_delta(price_to_beat) to get the current %-delta
+vs the window's price-to-beat, and binance.classify_volume() for the
+volume tag used in strategy scoring.
+"""
+
+import asyncio
+import logging
+import statistics
+import time
+from collections import deque
+from typing import Deque, Optional, Tuple
+
+from core.websockets import AsyncReconnectingWS
+import config
+
+log = logging.getLogger("binance")
+
+
+class BinanceFeed(AsyncReconnectingWS):
+    def __init__(self):
+        super().__init__(config.BINANCE_WS, name="binance")
+        self.last_price: Optional[float] = None
+        self.last_price_ts: float = 0.0
+        # Each entry: (ts, price, qty)
+        self.trades_window: Deque[Tuple[float, float, float]] = deque()
+        # Rolling deltas (ts, delta_pct) used to classify trend
+        self._recent_deltas: Deque[Tuple[float, float]] = deque()
+        # Baseline volumes per minute (for "high/normal/low")
+        self._historical_volumes: Deque[float] = deque(maxlen=30)
+
+    async def on_message(self, msg) -> None:
+        if not isinstance(msg, dict) or msg.get("e") != "trade":
+            return
+        try:
+            price = float(msg["p"])
+            qty = float(msg["q"])
+            ts = float(msg["T"]) / 1000.0
+        except (KeyError, ValueError, TypeError):
+            return
+        self.last_price = price
+        self.last_price_ts = ts
+        self.trades_window.append((ts, price, qty))
+        self._trim_window(ts)
+
+    def _trim_window(self, now: float) -> None:
+        cutoff = now - config.BINANCE_VOLUME_WINDOW_SECONDS
+        while self.trades_window and self.trades_window[0][0] < cutoff:
+            self.trades_window.popleft()
+        dcutoff = now - 90
+        while self._recent_deltas and self._recent_deltas[0][0] < dcutoff:
+            self._recent_deltas.popleft()
+
+    # ── Public API ───────────────────────────────────────────
+    def get_price(self) -> Optional[float]:
+        if self.last_price is None:
+            return None
+        # Reject stale prices (> 10s old = ws dead)
+        if time.time() - self.last_price_ts > 10:
+            return None
+        return self.last_price
+
+    def get_delta_pct(self, price_to_beat: float) -> Optional[float]:
+        p = self.get_price()
+        if p is None or price_to_beat <= 0:
+            return None
+        delta = (p - price_to_beat) / price_to_beat * 100.0
+        self._recent_deltas.append((time.time(), delta))
+        return delta
+
+    def classify_volume(self) -> str:
+        """Return 'high' | 'normal' | 'low' based on rolling BTC qty."""
+        if not self.trades_window:
+            return "low"
+        total_qty = sum(q for _, _, q in self.trades_window)
+        # Keep rolling history of per-minute totals
+        if not self._historical_volumes or (
+            time.time() - (self.trades_window[-1][0] if self.trades_window else 0) < 1
+        ):
+            self._historical_volumes.append(total_qty)
+        if len(self._historical_volumes) < 5:
+            return "normal"
+        median = statistics.median(self._historical_volumes)
+        if median <= 0:
+            return "normal"
+        ratio = total_qty / median
+        if ratio >= 1.4:
+            return "high"
+        if ratio <= 0.6:
+            return "low"
+        return "normal"
+
+    def classify_trend(self) -> str:
+        """'consistent' | 'choppy' | 'reversing' based on last ~60s of deltas."""
+        if len(self._recent_deltas) < 6:
+            return "choppy"
+        deltas = [d for _, d in list(self._recent_deltas)[-30:]]
+        positives = sum(1 for d in deltas if d > 0)
+        negatives = sum(1 for d in deltas if d < 0)
+        total = len(deltas)
+        last = deltas[-1]
+        first = deltas[0]
+        if last * first < 0:
+            # Sign flipped over the window → reversing
+            return "reversing"
+        if last >= 0 and positives / total >= 0.75:
+            return "consistent"
+        if last < 0 and negatives / total >= 0.75:
+            return "consistent"
+        return "choppy"

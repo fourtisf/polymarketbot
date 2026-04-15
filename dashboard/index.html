@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Polymarket 5M Bot — Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+:root {
+  --bg: #0b0f17;
+  --panel: #131a26;
+  --panel2: #1a2333;
+  --border: #253043;
+  --text: #e6edf6;
+  --muted: #8a97ad;
+  --green: #22c55e;
+  --red: #ef4444;
+  --blue: #3b82f6;
+  --amber: #f59e0b;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; padding: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-size: 14px;
+}
+header {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 16px;
+  padding: 14px 20px;
+  background: linear-gradient(90deg, #0f1624 0%, #131a26 100%);
+  border-bottom: 1px solid var(--border);
+  position: sticky; top: 0; z-index: 10;
+}
+header h1 { font-size: 18px; margin: 0; }
+header .badge {
+  padding: 4px 10px; border-radius: 999px; font-size: 12px;
+  background: var(--panel2); border: 1px solid var(--border);
+}
+header .badge.running { color: var(--green); }
+header .badge.paused  { color: var(--amber); }
+header .spacer { flex: 1; }
+main { padding: 16px 20px 60px; max-width: 1400px; margin: 0 auto; }
+
+.grid { display: grid; gap: 14px; }
+.grid.cols-3 { grid-template-columns: repeat(3, 1fr); }
+.grid.cols-2 { grid-template-columns: repeat(2, 1fr); }
+@media (max-width: 900px) {
+  .grid.cols-3, .grid.cols-2 { grid-template-columns: 1fr; }
+}
+
+.card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px 16px;
+}
+.card h2 { margin: 0 0 10px; font-size: 13px; text-transform: uppercase; color: var(--muted); letter-spacing: 0.5px; }
+.stat-row { display: flex; justify-content: space-between; padding: 4px 0; font-size: 13px; }
+.stat-row span:first-child { color: var(--muted); }
+.big { font-size: 22px; font-weight: 700; }
+.pos { color: var(--green); }
+.neg { color: var(--red); }
+
+table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+th, td {
+  padding: 8px 6px; text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+th { color: var(--muted); font-weight: 500; text-transform: uppercase; font-size: 11px; }
+tr.skip td { color: var(--muted); }
+
+.window-live {
+  background: linear-gradient(90deg, #1a2333 0%, #0f1624 100%);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 16px 18px;
+}
+.window-live .row { display: flex; justify-content: space-between; padding: 3px 0; }
+.window-live .row span:first-child { color: var(--muted); }
+
+.chart-wrap { position: relative; height: 240px; }
+.section-title { margin: 22px 0 10px; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
+
+#login { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; gap: 14px; }
+#login input { padding: 10px 14px; border-radius: 8px; border: 1px solid var(--border); background: var(--panel); color: var(--text); font-size: 14px; }
+#login button { padding: 10px 22px; border: none; border-radius: 8px; background: var(--green); color: #061; font-weight: 700; cursor: pointer; }
+
+.hidden { display: none !important; }
+</style>
+</head>
+<body>
+
+<div id="login">
+  <h2>🔒 Dashboard Login</h2>
+  <input id="tokenInput" type="password" placeholder="Dashboard token" />
+  <button id="loginBtn">Enter</button>
+  <div id="loginError" style="color: var(--red);"></div>
+</div>
+
+<div id="app" class="hidden">
+  <header>
+    <h1>🚀 Polymarket 5M Bot</h1>
+    <span id="statusBadge" class="badge running">🟢 RUNNING</span>
+    <span id="balanceBadge" class="badge">Balance: $--</span>
+    <span id="todayBadge" class="badge">Today: --</span>
+    <div class="spacer"></div>
+    <span id="streakBadge" class="badge">—</span>
+  </header>
+
+  <main>
+    <!-- Live window -->
+    <div class="section-title">🔴 Live Window</div>
+    <div class="window-live" id="liveWindow">
+      <div class="row"><span>Window</span><span id="lw-slug">—</span></div>
+      <div class="row"><span>Price to Beat</span><span id="lw-ptb">—</span></div>
+      <div class="row"><span>Current BTC</span><span id="lw-btc">—</span></div>
+      <div class="row"><span>Delta</span><span id="lw-delta">—</span></div>
+      <div class="row"><span>UP Token</span><span id="lw-up">—</span></div>
+      <div class="row"><span>DOWN Token</span><span id="lw-down">—</span></div>
+      <div class="row"><span>Time Left</span><span id="lw-time">—</span></div>
+      <div class="row"><span>Signal</span><span id="lw-signal">—</span></div>
+    </div>
+
+    <!-- Stats cards -->
+    <div class="section-title">📊 Performance</div>
+    <div class="grid cols-3">
+      <div class="card">
+        <h2>Today</h2>
+        <div class="big" id="t-pnl">$0.00</div>
+        <div class="stat-row"><span>Trades</span><span id="t-trades">0</span></div>
+        <div class="stat-row"><span>Win rate</span><span id="t-wr">0%</span></div>
+        <div class="stat-row"><span>Best</span><span id="t-best">0</span></div>
+        <div class="stat-row"><span>Worst</span><span id="t-worst">0</span></div>
+        <div class="stat-row"><span>Profit factor</span><span id="t-pf">0</span></div>
+      </div>
+      <div class="card">
+        <h2>This Week</h2>
+        <div class="big" id="w-pnl">$0.00</div>
+        <div class="stat-row"><span>Trades</span><span id="w-trades">0</span></div>
+        <div class="stat-row"><span>Win rate</span><span id="w-wr">0%</span></div>
+        <div class="stat-row"><span>Profit factor</span><span id="w-pf">0</span></div>
+      </div>
+      <div class="card">
+        <h2>All Time</h2>
+        <div class="big" id="a-pnl">$0.00</div>
+        <div class="stat-row"><span>Trades</span><span id="a-trades">0</span></div>
+        <div class="stat-row"><span>Win rate</span><span id="a-wr">0%</span></div>
+        <div class="stat-row"><span>ROI</span><span id="a-roi">0%</span></div>
+        <div class="stat-row"><span>Max drawdown</span><span id="a-dd">0</span></div>
+        <div class="stat-row"><span>Sharpe (daily)</span><span id="a-sharpe">0</span></div>
+        <div class="stat-row"><span>Days active</span><span id="a-days">0</span></div>
+      </div>
+    </div>
+
+    <!-- Charts -->
+    <div class="section-title">📈 Equity Curve</div>
+    <div class="card"><div class="chart-wrap"><canvas id="equityChart"></canvas></div></div>
+
+    <div class="grid cols-2" style="margin-top: 14px;">
+      <div class="card">
+        <h2>Daily PnL</h2>
+        <div class="chart-wrap"><canvas id="dailyChart"></canvas></div>
+      </div>
+      <div class="card">
+        <h2>Rolling 20-Trade Win Rate</h2>
+        <div class="chart-wrap"><canvas id="winrateChart"></canvas></div>
+      </div>
+    </div>
+
+    <!-- Trades table -->
+    <div class="section-title">📋 Live Trade Feed</div>
+    <div class="card" style="padding: 0;">
+      <table>
+        <thead>
+          <tr>
+            <th>Time</th><th>Side</th><th>Entry</th><th>P/L</th><th>Score</th><th>Reason</th>
+          </tr>
+        </thead>
+        <tbody id="tradesBody"></tbody>
+      </table>
+    </div>
+  </main>
+</div>
+
+<script>
+let TOKEN = localStorage.getItem("dashToken") || "";
+let equityChart, dailyChart, winrateChart;
+let sse;
+
+const $ = id => document.getElementById(id);
+const money = v => (v >= 0 ? "+" : "") + "$" + Number(v).toFixed(2);
+const cls = v => v > 0 ? "pos" : v < 0 ? "neg" : "";
+
+function authFetch(path) {
+  return fetch(path + (path.includes("?") ? "&" : "?") + "token=" + encodeURIComponent(TOKEN))
+    .then(r => { if (r.status === 401) { logout(); throw new Error("401"); } return r.json(); });
+}
+
+function logout() {
+  localStorage.removeItem("dashToken");
+  $("app").classList.add("hidden");
+  $("login").classList.remove("hidden");
+}
+
+$("loginBtn").onclick = async () => {
+  TOKEN = $("tokenInput").value.trim();
+  try {
+    const res = await fetch("/api/stats?token=" + encodeURIComponent(TOKEN));
+    if (!res.ok) throw new Error("bad token");
+    localStorage.setItem("dashToken", TOKEN);
+    $("login").classList.add("hidden");
+    $("app").classList.remove("hidden");
+    init();
+  } catch (e) {
+    $("loginError").textContent = "Invalid token";
+  }
+};
+
+async function refreshAll() {
+  try {
+    const s = await authFetch("/api/stats");
+    renderStats(s);
+    const eq = await authFetch("/api/equity");
+    renderCharts(eq);
+    const tr = await authFetch("/api/trades?limit=30");
+    renderTrades(tr);
+    const w = await authFetch("/api/window");
+    renderWindow(w);
+  } catch (e) { console.warn(e); }
+}
+
+function renderStats(s) {
+  const t = s.today, w = s.week, a = s.alltime;
+  $("t-pnl").textContent = money(t.pnl);  $("t-pnl").className = "big " + cls(t.pnl);
+  $("t-trades").textContent = `${t.trades} (${t.wins}W/${t.losses}L)`;
+  $("t-wr").textContent = t.win_rate + "%";
+  $("t-best").textContent = money(t.best);
+  $("t-worst").textContent = money(t.worst);
+  $("t-pf").textContent = t.profit_factor;
+
+  $("w-pnl").textContent = money(w.pnl);  $("w-pnl").className = "big " + cls(w.pnl);
+  $("w-trades").textContent = `${w.trades} (${w.wins}W/${w.losses}L)`;
+  $("w-wr").textContent = w.win_rate + "%";
+  $("w-pf").textContent = w.profit_factor;
+
+  $("a-pnl").textContent = money(a.pnl);  $("a-pnl").className = "big " + cls(a.pnl);
+  $("a-trades").textContent = `${a.trades} (${a.wins}W/${a.losses}L)`;
+  $("a-wr").textContent = a.win_rate + "%";
+  $("a-roi").textContent = a.roi_pct + "%";
+  $("a-dd").textContent = money(a.max_drawdown);
+  $("a-sharpe").textContent = a.sharpe_daily;
+  $("a-days").textContent = a.days_active;
+
+  $("balanceBadge").textContent = "Balance: $" + a.current_balance.toFixed(2);
+  const today = t.pnl;
+  $("todayBadge").textContent = "Today: " + money(today);
+  $("todayBadge").className = "badge " + cls(today);
+  $("streakBadge").textContent = "Streak: " + (s.streak || "—");
+
+  if (s.paused) {
+    $("statusBadge").textContent = "⏸️ PAUSED";
+    $("statusBadge").className = "badge paused";
+  } else {
+    $("statusBadge").textContent = "🟢 RUNNING";
+    $("statusBadge").className = "badge running";
+  }
+}
+
+function renderCharts(eq) {
+  // Equity curve
+  const eqLabels = eq.equity.map((_, i) => i);
+  const eqData = eq.equity.map(p => p.balance);
+  if (!equityChart) {
+    equityChart = new Chart($("equityChart"), {
+      type: "line",
+      data: { labels: eqLabels, datasets: [{
+        label: "Balance",
+        data: eqData,
+        borderColor: "#22c55e",
+        backgroundColor: "rgba(34,197,94,0.15)",
+        fill: true, tension: 0.25, pointRadius: 0,
+      }]},
+      options: chartOpts(),
+    });
+  } else {
+    equityChart.data.labels = eqLabels;
+    equityChart.data.datasets[0].data = eqData;
+    equityChart.update("none");
+  }
+  // Daily PnL
+  const dLabels = eq.daily.map(d => d.date.slice(5));
+  const dData = eq.daily.map(d => d.pnl);
+  const dColors = dData.map(v => v >= 0 ? "#22c55e" : "#ef4444");
+  if (!dailyChart) {
+    dailyChart = new Chart($("dailyChart"), {
+      type: "bar",
+      data: { labels: dLabels, datasets: [{ data: dData, backgroundColor: dColors }]},
+      options: chartOpts(false),
+    });
+  } else {
+    dailyChart.data.labels = dLabels;
+    dailyChart.data.datasets[0].data = dData;
+    dailyChart.data.datasets[0].backgroundColor = dColors;
+    dailyChart.update("none");
+  }
+  // Win rate
+  const wLabels = eq.win_rate.map((_, i) => i);
+  const wData = eq.win_rate.map(w => w.win_rate);
+  if (!winrateChart) {
+    winrateChart = new Chart($("winrateChart"), {
+      type: "line",
+      data: { labels: wLabels, datasets: [{
+        data: wData, borderColor: "#3b82f6",
+        backgroundColor: "rgba(59,130,246,0.15)",
+        fill: true, tension: 0.25, pointRadius: 0,
+      }]},
+      options: chartOpts(false, 0, 100),
+    });
+  } else {
+    winrateChart.data.labels = wLabels;
+    winrateChart.data.datasets[0].data = wData;
+    winrateChart.update("none");
+  }
+}
+
+function chartOpts(legend = false, yMin = null, yMax = null) {
+  return {
+    responsive: true, maintainAspectRatio: false,
+    plugins: { legend: { display: legend } },
+    scales: {
+      x: { ticks: { color: "#8a97ad" }, grid: { color: "rgba(255,255,255,0.05)" }},
+      y: {
+        ticks: { color: "#8a97ad" }, grid: { color: "rgba(255,255,255,0.05)" },
+        min: yMin ?? undefined, max: yMax ?? undefined,
+      },
+    },
+  };
+}
+
+function renderTrades(trades) {
+  const tbody = $("tradesBody");
+  tbody.innerHTML = "";
+  for (const t of trades) {
+    const tr = document.createElement("tr");
+    const ts = new Date((t.ts || 0) * 1000).toISOString().substr(11, 5);
+    const rl = t.reason_log || {};
+    const isSkip = t.action === "SKIP" || t.side === "SKIP";
+    if (isSkip) tr.className = "skip";
+    const pnl = t.pnl ?? 0;
+    const pnlCell = isSkip ? "—" : `<span class="${cls(pnl)}">${money(pnl)}</span>`;
+    const delta = (rl.delta_pct || 0).toFixed(3);
+    const sec = rl.seconds_remaining || "—";
+    const reason = isSkip ? (rl.skip_reason || "—") : `Δ${delta}% ${sec}s`;
+    tr.innerHTML = `
+      <td>${ts}</td>
+      <td>${t.side || "—"}</td>
+      <td>${isSkip ? "—" : "$" + Number(t.entry_price || 0).toFixed(2)}</td>
+      <td>${pnlCell}</td>
+      <td>${rl.score ?? "—"}</td>
+      <td>${reason}</td>
+    `;
+    tbody.appendChild(tr);
+  }
+}
+
+function renderWindow(w) {
+  $("lw-slug").textContent = w.slug || "—";
+  $("lw-ptb").textContent = w.price_to_beat != null ? "$" + Number(w.price_to_beat).toFixed(2) : "—";
+  $("lw-btc").textContent = w.current_btc != null ? "$" + Number(w.current_btc).toFixed(2) : "—";
+  const dp = w.delta_pct;
+  if (dp != null) {
+    $("lw-delta").textContent = (dp >= 0 ? "+" : "") + dp.toFixed(4) + "%";
+    $("lw-delta").className = cls(dp);
+  }
+  $("lw-up").textContent = w.token_up_price != null ? "$" + Number(w.token_up_price).toFixed(3) : "—";
+  $("lw-down").textContent = w.token_down_price != null ? "$" + Number(w.token_down_price).toFixed(3) : "—";
+  if (w.seconds_remaining != null) {
+    const s = Math.max(0, w.seconds_remaining|0);
+    $("lw-time").textContent = `${Math.floor(s/60)}:${String(s%60).padStart(2, "0")}`;
+  }
+  $("lw-signal").textContent = w.signal || "—";
+}
+
+function startSSE() {
+  if (sse) sse.close();
+  sse = new EventSource("/api/live?token=" + encodeURIComponent(TOKEN));
+  sse.addEventListener("hello", e => renderWindow(JSON.parse(e.data)));
+  sse.addEventListener("window", e => renderWindow(JSON.parse(e.data)));
+  sse.addEventListener("trade", e => refreshAll());
+  sse.addEventListener("stats", e => refreshAll());
+  sse.onerror = () => { sse.close(); setTimeout(startSSE, 3000); };
+}
+
+function init() {
+  refreshAll();
+  startSSE();
+  setInterval(refreshAll, 15000);  // safety poll
+}
+
+if (TOKEN) {
+  $("login").classList.add("hidden");
+  $("app").classList.remove("hidden");
+  init();
+}
+</script>
+</body>
+</html>
