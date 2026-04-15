@@ -36,7 +36,7 @@ log = logging.getLogger("telegram")
 # Constants
 # ─────────────────────────────────────────────────────────────
 
-POLYGON_RPC = "https://polygon-rpc.com"
+POLYGON_RPC = "https://polygon-bor-rpc.publicnode.com"
 USDC_CONTRACT = "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359"
 ENV_PATH = Path(config.PROJECT_ROOT) / ".env"
 
@@ -273,6 +273,43 @@ def _short_addr(addr: str) -> str:
     if not addr or not addr.startswith("0x") or len(addr) < 10:
         return addr or "(not set)"
     return f"{addr[:6]}...{addr[-4:]}"
+
+
+def wallet_link_html(addr: str, label: str = "") -> str:
+    """Return an HTML <a> link to Polygonscan for ``addr``."""
+    if not addr or not addr.startswith("0x") or len(addr) < 10:
+        return label or "(not set)"
+    text = label or _short_addr(addr)
+    return f'<a href="https://polygonscan.com/address/{addr}">{text}</a>'
+
+
+def tx_link_html(tx_hash: str, label: str = "View TX") -> str:
+    if not tx_hash:
+        return ""
+    return f'<a href="https://polygonscan.com/tx/{tx_hash}">{label}</a>'
+
+
+def market_link_html(slug: str, label: str = "Market") -> str:
+    if not slug:
+        return ""
+    return f'<a href="https://polymarket.com/event/{slug}">{label}</a>'
+
+
+def window_label_from_slug(slug: str) -> str:
+    """Convert a window slug like 'btc-updown-5m-1776258600' to 'HH:MM-HH:MM ET'."""
+    try:
+        end = int(slug.rsplit("-", 1)[-1])
+    except Exception:
+        return slug
+    try:
+        from zoneinfo import ZoneInfo
+        tz = ZoneInfo("America/New_York")
+    except Exception:
+        tz = timezone.utc
+    start = end - 300
+    s = datetime.fromtimestamp(start, tz=tz).strftime("%H:%M")
+    e = datetime.fromtimestamp(end, tz=tz).strftime("%H:%M")
+    return f"{s}-{e} ET"
 
 
 def _fmt_stats_block(title: str, s: Dict[str, Any]) -> str:
@@ -651,7 +688,7 @@ class CommandBot:
             f"🏠 <b>DASHBOARD</b>\n"
             f"{status} · {mode}\n"
             f"{BAR}\n"
-            f"👛 <code>{_short_addr(addr)}</code>\n"
+            f"👛 {wallet_link_html(addr, addr)}\n"
             f"💵 ${usdc:,.2f} · ⛽ {pol:,.4f}\n"
             f"{BAR}\n"
             f"Session:  <b>{session_pnl:+.2f}</b> {_ico(session_pnl)}\n"
@@ -863,9 +900,8 @@ class CommandBot:
         text = (
             f"👛 <b>WALLET</b>\n"
             f"{BAR}\n"
-            f"Address:\n<code>{addr}</code>\n\n"
-            f"💵 USDC: <b>${usdc:,.2f}</b>\n"
-            f"⛽ POL:  <b>{pol:,.4f}</b>"
+            f"🔑 {wallet_link_html(addr, addr)}\n"
+            f"💵 USDC: <b>${usdc:,.2f}</b> · ⛽ POL: <b>{pol:,.4f}</b>"
         )
         kb = {"inline_keyboard": [[
             {"text": "🔄 Refresh",    "callback_data": "wallet:refresh"},
@@ -972,20 +1008,19 @@ class CommandBot:
         for i, tr in enumerate(trades, 1):
             ts = datetime.fromtimestamp(
                 tr.get("ts", 0), tz=timezone.utc
-            ).strftime("%m/%d %H:%M")
+            ).strftime("%H:%M")
             side = tr.get("side", "?")
+            short_side = "UP" if side == "UP" else "DN"
             price = tr.get("entry_price", 0)
             pnl = tr.get("pnl", 0)
             icon = "🏆" if pnl > 0 else "❌"
             rl = tr.get("reason_log", {}) or {}
-            delta = rl.get("delta_pct", 0)
-            score = rl.get("score", rl.get("confidence", 0))
-            trend = rl.get("delta_trend", "?")
-            vol = rl.get("binance_volume", "?")
+            score = rl.get("score", rl.get("confidence", tr.get("confidence", 0)))
+            mlink = market_link_html(tr.get("window_slug", ""))
             lines.append(
-                f"{i}. {icon} {ts} — <b>{side}</b> @ ${price:.3f} "
-                f"→ <b>{pnl:+.2f}</b>\n"
-                f"   Δ{delta:+.3f}% · score {score} · {trend}/{vol}"
+                f"{i}. {icon} {ts} {short_side} @${price:.3f} "
+                f"→ <b>{pnl:+.2f}</b> | Score {score}"
+                + (f" | {mlink}" if mlink else "")
             )
         await self.notifier.send_text("\n".join(lines), chat_id=chat_id)
 

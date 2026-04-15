@@ -30,6 +30,7 @@ class FillResult:
     filled_shares: float = 0.0
     avg_price: float = 0.0
     error: str = ""
+    tx_hash: str = ""
 
 
 class Executor:
@@ -146,11 +147,20 @@ class Executor:
         order_id = resp.get("orderID") or resp.get("order_id") or ""
         status = resp.get("status", "")
         filled = float(resp.get("filled", 0) or 0)
+        tx_hash = ""
+        hashes = resp.get("transactionsHashes") or resp.get("transaction_hashes")
+        if isinstance(hashes, list) and hashes:
+            tx_hash = str(hashes[0])
+        elif isinstance(hashes, str):
+            tx_hash = hashes
+        else:
+            tx_hash = resp.get("transactHash") or resp.get("txHash") or ""
         return FillResult(
             success=status in ("matched", "live", "filled"),
             order_id=order_id,
             filled_shares=filled,
             avg_price=price,
+            tx_hash=tx_hash,
         )
 
     async def _cancel(self, order_id: str) -> None:

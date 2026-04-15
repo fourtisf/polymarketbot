@@ -3,7 +3,8 @@
     "allow": [
       "Bash(python3 -m py_compile bot.py config.py core/*.py services/*.py utils/*.py dashboard/server.py)",
       "Bash(python3 *)",
-      "Bash(./venv/bin/python *)"
+      "Bash(./venv/bin/python *)",
+      "Bash(pm2 restart *)"
     ]
   }
 }

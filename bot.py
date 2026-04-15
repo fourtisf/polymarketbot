@@ -42,7 +42,14 @@ from services.chainlink_feed import ChainlinkFeed
 from services.polymarket_feed import PolymarketFeed
 from utils.logger import TradeLogger, setup_logging
 from utils.pnl_tracker import PnLTracker
-from utils.telegram import CommandBot, Notifier
+from utils.telegram import (
+    CommandBot,
+    Notifier,
+    market_link_html,
+    tx_link_html,
+    wallet_link_html,
+    window_label_from_slug,
+)
 from dashboard.server import DashboardServer
 
 log = logging.getLogger("bot")
@@ -347,31 +354,31 @@ class TradingBot:
             "confidence": decision.confidence,
             "reason_log": decision.reason_log,
             "order_id": fill.order_id,
+            "tx_hash": fill.tx_hash,
         }
         self.state.entry_record = record
         self.trade_log.log_trade({**record, "phase": "entry"})
 
         rl = decision.reason_log or {}
-        expected_profit = round((1.0 - fill.avg_price) * fill.filled_shares, 2)
-        max_loss = round(fill.avg_price * fill.filled_shares, 2)
         today = self.pnl.today_stats()
+        sess = self.risk.state.session_pnl
+        market_lnk = market_link_html(w.slug)
+        wallet_lnk = wallet_link_html(config.POLYGON_PUBLIC_KEY or "")
+        tx_lnk = tx_link_html(fill.tx_hash) if fill.tx_hash else ""
+        link_parts = [p for p in (market_lnk, wallet_lnk, tx_lnk) if p]
+        links_line = " · ".join(link_parts) if link_parts else ""
+        order_line = ""
+        if not fill.tx_hash and fill.order_id and not self.dry_run:
+            order_line = f"Order: <code>{fill.order_id[:16]}</code>\n"
         await self.notifier.send_text(
-            f"🟢 <b>ENTRY</b> — {record['side']} {w.slug}\n"
-            f"Shares: <b>{fill.filled_shares:.0f}</b> @ ${fill.avg_price:.3f}\n"
-            f"Cost: <b>${record['cost']:.2f}</b>\n"
-            f"Confidence: <b>{decision.confidence}/100</b>\n"
-            f"━━━━━━━━━━━━\n"
-            f"<b>Reason breakdown</b>\n"
-            f"• Δ: {rl.get('delta_pct', 0):+.3f}%\n"
-            f"• Time left: {rl.get('seconds_remaining', '?')}s\n"
-            f"• Trend: {rl.get('delta_trend', '?')}\n"
-            f"• Volume: {rl.get('binance_volume', '?')}\n"
-            f"• Token px: UP ${rl.get('token_up_price', 0):.3f} / "
-            f"DOWN ${rl.get('token_down_price', 0):.3f}\n"
-            f"━━━━━━━━━━━━\n"
-            f"Expected: +${expected_profit:.2f} / -${max_loss:.2f}\n"
-            f"Session: {self.risk.state.session_pnl:+.2f} · "
-            f"Today: {today['pnl']:+.2f} ({today['trades']}t)"
+            f"🟢 <b>ENTRY</b> — {window_label_from_slug(w.slug)}\n"
+            f"BUY {record['side']} × {fill.filled_shares:.0f} @ ${fill.avg_price:.3f}\n"
+            f"Cost: ${record['cost']:.2f} | Score: {decision.confidence}/100\n"
+            f"Δ {rl.get('delta_pct', 0):+.3f}% | ⏱ {rl.get('seconds_remaining', '?')}s | "
+            f"Trend: {rl.get('delta_trend', '?')}\n"
+            f"{order_line}"
+            f"🔗 {links_line}\n"
+            f"Session: {sess:+.2f} ({today.get('wins', 0)}W/{today.get('losses', 0)}L)"
         )
         self.dashboard.broadcast("trade", record)
 
@@ -438,21 +445,31 @@ class TradingBot:
         # Notification
         today = self.pnl.today_stats()
         alltime = self.pnl.alltime_stats()
-        streak = self.pnl.current_streak()
-        icon = "🏆 WIN" if win else "❌ LOSS"
         delta_close = (close_price - w.price_to_beat) / w.price_to_beat * 100
-        await self.notifier.send_text(
-            f"📊 <b>WINDOW RESULT</b> — {w.slug}\n"
-            f"BTC open:  ${w.price_to_beat:,.2f}\n"
-            f"BTC close: ${close_price:,.2f} ({delta_close:+.3f}%)\n"
-            f"Result: <b>{w.resolution}</b>\n"
-            f"Our {side} @ ${entry:.3f} × {shares:.0f}\n"
-            f"{icon}: <b>{pnl:+.2f}</b>\n"
-            f"━━━━━━━━━━━━\n"
-            f"Session: {self.risk.state.session_pnl:+.2f} · "
-            f"Today: {today['pnl']:+.2f} ({today['trades']}t · WR {today['win_rate']}%)\n"
-            f"Streak: {streak} · Balance: ${alltime['current_balance']:.2f}"
-        )
+        market_lnk = market_link_html(w.slug)
+        wins_today = today.get("wins", 0)
+        losses_today = today.get("losses", 0)
+        wr = today.get("win_rate", 0)
+        bal = alltime["current_balance"]
+        if win:
+            text = (
+                f"🏆 <b>WIN</b> +${pnl:.2f}\n"
+                f"BTC: ${w.price_to_beat:,.2f} → ${close_price:,.2f} "
+                f"({delta_close:+.3f}%) = {w.resolution} ✅\n"
+                f"🔗 {market_lnk}\n"
+                f"Today: {today['pnl']:+.2f} "
+                f"({wins_today}W/{losses_today}L) {wr}% | Balance: ${bal:.2f}"
+            )
+        else:
+            text = (
+                f"❌ <b>LOSS</b> -${abs(pnl):.2f}\n"
+                f"BTC: ${w.price_to_beat:,.2f} → ${close_price:,.2f} "
+                f"({delta_close:+.3f}%) = {w.resolution}\n"
+                f"🔗 {market_lnk}\n"
+                f"Today: {today['pnl']:+.2f} "
+                f"({wins_today}W/{losses_today}L) {wr}% | Balance: ${bal:.2f}"
+            )
+        await self.notifier.send_text(text)
         self.dashboard.broadcast("trade", rec_final)
         self.dashboard.broadcast("stats", {"pnl": pnl})
 
