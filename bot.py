@@ -104,10 +104,22 @@ class TradingBot:
         self.state = BotState()
 
         self.dashboard = DashboardServer(self.pnl, self.risk, self.state)
-        self.cmdbot = CommandBot(self.pnl, self.risk, self.executor, self.notifier)
+        self.cmdbot = CommandBot(self.pnl, self.risk, self.executor, self.notifier, trading_bot=self)
 
         self._tasks: list = []
         self._stopping = False
+
+    # ── Runtime control hooks (used by Telegram CommandBot) ─
+    def set_dry_run(self, dry_run: bool) -> None:
+        """Flip dry-run mode at runtime and force executor re-init."""
+        self.dry_run = dry_run
+        config.RUNTIME.dry_run = dry_run
+        self.executor.dry_run = dry_run
+        self.executor._client = None
+
+    def reload_wallet(self) -> None:
+        """Called after /setwallet updates credentials in-memory."""
+        self.executor._client = None
 
     # ── Lifecycle ───────────────────────────────────────
     async def start(self) -> None:
@@ -331,12 +343,27 @@ class TradingBot:
         self.state.entry_record = record
         self.trade_log.log_trade({**record, "phase": "entry"})
 
+        rl = decision.reason_log or {}
+        expected_profit = round((1.0 - fill.avg_price) * fill.filled_shares, 2)
+        max_loss = round(fill.avg_price * fill.filled_shares, 2)
+        today = self.pnl.today_stats()
         await self.notifier.send_text(
-            f"🟢 <b>ENTRY</b>: {record['side']} @ ${fill.avg_price:.3f} × {fill.filled_shares:.0f} sh\n"
-            f"Score {decision.confidence}/100 · "
-            f"Δ{decision.reason_log.get('delta_pct', 0):+.3f}% · "
-            f"{decision.reason_log.get('seconds_remaining', '?')}s left\n"
-            f"Cost: ${record['cost']:.2f}"
+            f"🟢 <b>ENTRY</b> — {record['side']} {w.slug}\n"
+            f"Shares: <b>{fill.filled_shares:.0f}</b> @ ${fill.avg_price:.3f}\n"
+            f"Cost: <b>${record['cost']:.2f}</b>\n"
+            f"Confidence: <b>{decision.confidence}/100</b>\n"
+            f"━━━━━━━━━━━━\n"
+            f"<b>Reason breakdown</b>\n"
+            f"• Δ: {rl.get('delta_pct', 0):+.3f}%\n"
+            f"• Time left: {rl.get('seconds_remaining', '?')}s\n"
+            f"• Trend: {rl.get('delta_trend', '?')}\n"
+            f"• Volume: {rl.get('binance_volume', '?')}\n"
+            f"• Token px: UP ${rl.get('token_up_price', 0):.3f} / "
+            f"DOWN ${rl.get('token_down_price', 0):.3f}\n"
+            f"━━━━━━━━━━━━\n"
+            f"Expected: +${expected_profit:.2f} / -${max_loss:.2f}\n"
+            f"Session: {self.risk.state.session_pnl:+.2f} · "
+            f"Today: {today['pnl']:+.2f} ({today['trades']}t)"
         )
         self.dashboard.broadcast("trade", record)
 
@@ -399,16 +426,21 @@ class TradingBot:
 
         # Notification
         today = self.pnl.today_stats()
+        alltime = self.pnl.alltime_stats()
+        streak = self.pnl.current_streak()
         icon = "🏆 WIN" if win else "❌ LOSS"
         delta_close = (close_price - w.price_to_beat) / w.price_to_beat * 100
         await self.notifier.send_text(
             f"📊 <b>WINDOW RESULT</b> — {w.slug}\n"
-            f"Open: ${w.price_to_beat:,.2f} · Close: ${close_price:,.2f} ({delta_close:+.3f}%)\n"
-            f"Result: {w.resolution}\n"
+            f"BTC open:  ${w.price_to_beat:,.2f}\n"
+            f"BTC close: ${close_price:,.2f} ({delta_close:+.3f}%)\n"
+            f"Result: <b>{w.resolution}</b>\n"
             f"Our {side} @ ${entry:.3f} × {shares:.0f}\n"
-            f"{icon}: {pnl:+.2f}\n"
+            f"{icon}: <b>{pnl:+.2f}</b>\n"
+            f"━━━━━━━━━━━━\n"
             f"Session: {self.risk.state.session_pnl:+.2f} · "
-            f"Today: {today['pnl']:+.2f} ({today['trades']}t · WR {today['win_rate']}%)"
+            f"Today: {today['pnl']:+.2f} ({today['trades']}t · WR {today['win_rate']}%)\n"
+            f"Streak: {streak} · Balance: ${alltime['current_balance']:.2f}"
         )
         self.dashboard.broadcast("trade", rec_final)
         self.dashboard.broadcast("stats", {"pnl": pnl})

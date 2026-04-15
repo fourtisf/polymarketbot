@@ -66,13 +66,29 @@ class DashboardServer:
         return web.Response(text=html, content_type="text/html")
 
     async def handle_stats(self, request: web.Request) -> web.Response:
+        trades = self.pnl.all_trades()
+        today_key = __import__("datetime").datetime.utcnow().strftime("%Y-%m-%d")
+        week_cutoff = __import__("time").time() - 7 * 86400
+
+        def avg_conf(subset):
+            vals = [t.get("confidence", 0) for t in subset if t.get("confidence")]
+            return round(sum(vals) / len(vals), 1) if vals else 0.0
+
+        today = self.pnl.today_stats()
+        today["avg_confidence"] = avg_conf([t for t in trades if t.get("date") == today_key])
+        week = self.pnl.week_stats()
+        week["avg_confidence"] = avg_conf([t for t in trades if t.get("ts", 0) >= week_cutoff])
+        alltime = self.pnl.alltime_stats()
+        alltime["avg_confidence"] = avg_conf(trades)
+
         return web.json_response({
-            "today": self.pnl.today_stats(),
-            "week": self.pnl.week_stats(),
-            "alltime": self.pnl.alltime_stats(),
+            "today": today,
+            "week": week,
+            "alltime": alltime,
             "streak": self.pnl.current_streak(),
             "risk": self.risk.snapshot(),
             "paused": config.RUNTIME.paused,
+            "dry_run": config.RUNTIME.dry_run,
         })
 
     async def handle_trades(self, request: web.Request) -> web.Response:
