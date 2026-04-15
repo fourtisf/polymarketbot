@@ -1,16 +1,18 @@
 """
 Telegram bot interface — notifications + interactive commands.
 
-Provides:
-  - Notifier: one-way messaging (send_text / send_photo / low-level helpers).
-  - CommandBot: two-way long-polling bot with a full setup wizard,
-    wallet onboarding (/setwallet), inline-keyboard settings editor,
-    and live trading controls (/go /stop /mode /pause ...).
+Uses raw Telegram Bot API over aiohttp (no python-telegram-bot dep).
 
-Dependencies are kept intentionally minimal: raw HTTP via aiohttp,
-eth_account for key derivation, py_clob_client for API credential
-derivation. web3 is listed in requirements for convenience but we
-speak JSON-RPC directly so it is not imported here.
+Public surface consumed by bot.py:
+  - Notifier: send_text / send_photo / edit_text / delete_message / answer_callback
+  - CommandBot(pnl_tracker, risk_manager, executor, notifier, trading_bot=None)
+      .run()   — long-poll loop
+      .stop()  — graceful stop
+
+Wallet onboarding (/setwallet) derives the address, fetches USDC/POL
+balances from Polygon RPC, derives Polymarket CLOB API credentials, and
+persists everything to .env. The user message containing the private key
+is deleted immediately on receipt.
 """
 
 from __future__ import annotations
@@ -19,7 +21,7 @@ import asyncio
 import json
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -38,11 +40,15 @@ POLYGON_RPC = "https://polygon-rpc.com"
 USDC_CONTRACT = "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359"
 ENV_PATH = Path(config.PROJECT_ROOT) / ".env"
 
-# Settings exposed through the inline-keyboard editor.
-# Each entry maps a short key → (label, env_key, type, presets, apply_fn).
-#
-# `apply_fn(value)` is a callable that writes the parsed value to the
-# appropriate config attribute in-memory. env is persisted separately.
+BAR = "━━━━━━━━━━━━━━"
+
+
+def _set_module_attr(name: str, value: Any) -> None:
+    setattr(config, name, value)
+
+
+# Settings surfaced through /settings — 6 entries, each with presets,
+# parser, current-value getter, and an apply function.
 SETTINGS_SPEC: Dict[str, Dict[str, Any]] = {
     "base_size": {
         "label": "Trade size (USD)",
@@ -95,16 +101,11 @@ SETTINGS_SPEC: Dict[str, Dict[str, Any]] = {
 }
 
 
-def _set_module_attr(name: str, value: Any) -> None:
-    setattr(config, name, value)
-
-
 # ─────────────────────────────────────────────────────────────
-# .env file writer (atomic upsert)
+# .env upsert (atomic, preserves comments/order)
 # ─────────────────────────────────────────────────────────────
 
 def update_env_file(updates: Dict[str, str], path: Path = ENV_PATH) -> None:
-    """Upsert ``updates`` into the .env file, preserving comments/order."""
     lines: List[str] = []
     if path.exists():
         lines = path.read_text().splitlines()
@@ -134,12 +135,14 @@ def update_env_file(updates: Dict[str, str], path: Path = ENV_PATH) -> None:
 
 
 # ─────────────────────────────────────────────────────────────
-# Polygon RPC helpers (no web3 dependency)
+# Polygon RPC helpers
 # ─────────────────────────────────────────────────────────────
 
 async def _rpc_call(session: aiohttp.ClientSession, method: str, params: list) -> Any:
     payload = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
-    async with session.post(POLYGON_RPC, json=payload, timeout=aiohttp.ClientTimeout(total=15)) as r:
+    async with session.post(
+        POLYGON_RPC, json=payload, timeout=aiohttp.ClientTimeout(total=15)
+    ) as r:
         data = await r.json()
     if "error" in data:
         raise RuntimeError(data["error"].get("message", "rpc error"))
@@ -162,7 +165,7 @@ async def fetch_balances(address: str) -> Tuple[float, float]:
 
 
 # ─────────────────────────────────────────────────────────────
-# Notifier — thin HTTP wrapper
+# Notifier — thin HTTP wrapper around Bot API
 # ─────────────────────────────────────────────────────────────
 
 class Notifier:
@@ -226,21 +229,63 @@ class Notifier:
         await self._post("deleteMessage", {"chat_id": chat_id, "message_id": message_id})
 
     async def answer_callback(self, callback_id: str, text: str = "") -> None:
-        await self._post("answerCallbackQuery", {"callback_query_id": callback_id, "text": text})
+        await self._post(
+            "answerCallbackQuery",
+            {"callback_query_id": callback_id, "text": text},
+        )
 
-    async def send_photo(self, png_bytes: bytes, caption: str = "") -> None:
-        if not self.enabled:
+    async def send_photo(
+        self,
+        png_bytes: bytes,
+        caption: str = "",
+        chat_id: Optional[str] = None,
+    ) -> None:
+        if not self.token:
+            return
+        target = chat_id or self.chat_id
+        if not target:
             return
         url = f"https://api.telegram.org/bot{self.token}/sendPhoto"
         try:
             form = aiohttp.FormData()
-            form.add_field("chat_id", self.chat_id)
+            form.add_field("chat_id", str(target))
             form.add_field("caption", caption)
-            form.add_field("photo", png_bytes, filename="chart.png", content_type="image/png")
+            form.add_field("parse_mode", "HTML")
+            form.add_field(
+                "photo", png_bytes,
+                filename="chart.png", content_type="image/png",
+            )
             async with aiohttp.ClientSession() as s:
                 await s.post(url, data=form)
         except Exception as exc:
             log.warning("telegram send_photo failed: %s", exc)
+
+
+# ─────────────────────────────────────────────────────────────
+# Small formatting helpers
+# ─────────────────────────────────────────────────────────────
+
+def _ico(pnl: float) -> str:
+    return "📈" if pnl >= 0 else "📉"
+
+
+def _short_addr(addr: str) -> str:
+    if not addr or not addr.startswith("0x") or len(addr) < 10:
+        return addr or "(not set)"
+    return f"{addr[:6]}...{addr[-4:]}"
+
+
+def _fmt_stats_block(title: str, s: Dict[str, Any]) -> str:
+    return (
+        f"<b>{title}</b>\n"
+        f"PnL: <b>{s.get('pnl', 0):+.2f}</b> {_ico(s.get('pnl', 0))}\n"
+        f"Trades: {s.get('trades', 0)} · WR {s.get('win_rate', 0)}%\n"
+        f"W/L: {s.get('wins', 0)}/{s.get('losses', 0)} · "
+        f"PF {s.get('profit_factor', 0)}\n"
+        f"Avg win: {s.get('avg_win', 0):+.2f} · "
+        f"Avg loss: {s.get('avg_loss', 0):+.2f}\n"
+        f"Best: {s.get('best', 0):+.2f} · Worst: {s.get('worst', 0):+.2f}"
+    )
 
 
 # ─────────────────────────────────────────────────────────────
@@ -260,7 +305,8 @@ class CommandBot:
         self.risk = risk_manager
         self.executor = executor
         self.notifier = notifier
-        self.trading_bot = trading_bot  # set later by bot.py if needed
+        self.trading_bot = trading_bot
+
         self._offset: int = 0
         self._running = False
         # chat_id → setting key awaiting a typed value
@@ -273,6 +319,8 @@ class CommandBot:
             return
         self._running = True
         log.info("telegram command bot started")
+        # Install BotFather-style command menu (best-effort).
+        asyncio.create_task(self._install_command_menu())
         while self._running:
             try:
                 await self._poll_once()
@@ -283,11 +331,37 @@ class CommandBot:
     async def stop(self) -> None:
         self._running = False
 
+    async def _install_command_menu(self) -> None:
+        commands = [
+            {"command": "start", "description": "Main dashboard"},
+            {"command": "wallet", "description": "Wallet address + balances"},
+            {"command": "setwallet", "description": "Set private key (auto-deleted)"},
+            {"command": "go", "description": "Start auto trading"},
+            {"command": "stop", "description": "Stop auto trading"},
+            {"command": "mode", "description": "Toggle dry-run / live"},
+            {"command": "pnl", "description": "Profit / loss summary"},
+            {"command": "stats", "description": "Full statistics"},
+            {"command": "trades", "description": "Recent trades"},
+            {"command": "chart", "description": "PnL chart image"},
+            {"command": "risk", "description": "Risk status"},
+            {"command": "status", "description": "Current live window"},
+            {"command": "settings", "description": "Edit settings"},
+            {"command": "pause", "description": "30 min cooldown"},
+            {"command": "help", "description": "Show all commands"},
+        ]
+        await self.notifier._post("setMyCommands", {"commands": commands})
+
     async def _poll_once(self) -> None:
         url = f"https://api.telegram.org/bot{self.notifier.token}/getUpdates"
-        params = {"timeout": 25, "offset": self._offset, "allowed_updates": json.dumps(["message", "callback_query"])}
+        params = {
+            "timeout": 25,
+            "offset": self._offset,
+            "allowed_updates": json.dumps(["message", "callback_query"]),
+        }
         try:
-            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=35)) as s:
+            async with aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=35)
+            ) as s:
                 async with s.get(url, params=params) as resp:
                     data = await resp.json()
         except Exception:
@@ -307,14 +381,13 @@ class CommandBot:
             except Exception as exc:
                 log.exception("update handling failed: %s", exc)
 
-    # ── Dispatchers ────────────────────────────────────────
+    # ── Message dispatch ───────────────────────────────────
     async def _handle_message(self, msg: dict) -> None:
         chat_id = str(msg["chat"]["id"])
         msg_id = msg.get("message_id")
         text = (msg.get("text") or "").strip()
 
-        # /setwallet: delete message IMMEDIATELY for security,
-        # before any parsing/logging.
+        # /setwallet — delete message IMMEDIATELY before parsing/logging.
         if text.lower().startswith("/setwallet"):
             await self.notifier.delete_message(chat_id, msg_id)
             parts = text.split()
@@ -331,7 +404,7 @@ class CommandBot:
         if not text:
             return
 
-        # If user owes a typed value for a pending setting edit, consume it.
+        # If awaiting typed value for a pending setting edit, consume it.
         if chat_id in self._pending_edit and not text.startswith("/"):
             key = self._pending_edit.pop(chat_id)
             await self._apply_setting(key, text, chat_id)
@@ -350,30 +423,24 @@ class CommandBot:
             "/start": self._cmd_start,
             "/wallet": self._cmd_wallet,
             "/go": self._cmd_go,
-            "/stop": self._cmd_stop,
             "/resume": self._cmd_go,
+            "/stop": self._cmd_stop,
             "/mode": self._cmd_mode,
-            "/status": self._cmd_status,
             "/pnl": self._cmd_pnl,
-            "/dashboard": self._cmd_dashboard,
-            "/chart": self._cmd_chart,
+            "/stats": self._cmd_stats,
             "/trades": self._cmd_trades,
             "/history": self._cmd_trades,
+            "/chart": self._cmd_chart,
+            "/status": self._cmd_status,
             "/risk": self._cmd_risk,
+            "/settings": self._cmd_settings,
+            "/config": self._cmd_settings,
             "/pause": self._cmd_pause,
-            "/set": self._cmd_set,
-            "/config": self._cmd_dashboard,
-            "/stats": self._cmd_pnl,
+            "/help": self._cmd_help,
         }
         handler = handlers.get(cmd)
         if handler is None:
-            await self.notifier.send_text(
-                "Unknown command.\n\n"
-                "Core: /start /setwallet /wallet /go /stop /mode\n"
-                "Info: /status /pnl /dashboard /chart /trades /risk\n"
-                "Control: /pause /set KEY VALUE",
-                chat_id=chat_id,
-            )
+            await self._cmd_help(args, chat_id)
             return
         await handler(args, chat_id)
 
@@ -384,12 +451,51 @@ class CommandBot:
         chat_id = str(msg.get("chat", {}).get("id", ""))
         msg_id = msg.get("message_id")
 
-        if data.startswith("edit:"):
+        # Dashboard-level navigation buttons
+        if data == "nav:go":
+            await self._cmd_go([], chat_id)
+            await self._send_dashboard(chat_id)
+        elif data == "nav:stop":
+            await self._cmd_stop([], chat_id)
+            await self._send_dashboard(chat_id)
+        elif data == "nav:stats":
+            await self._cmd_stats([], chat_id)
+        elif data == "nav:pnl":
+            await self._cmd_pnl([], chat_id)
+        elif data == "nav:trades":
+            await self._cmd_trades([], chat_id)
+        elif data == "nav:chart":
+            await self._cmd_chart([], chat_id)
+        elif data == "nav:settings":
+            await self._send_settings(chat_id, edit_msg_id=msg_id)
+        elif data == "nav:wallet":
+            await self._cmd_wallet([], chat_id)
+        elif data == "nav:dashboard":
+            await self._send_dashboard(chat_id, edit_msg_id=msg_id)
+
+        # Wallet refresh
+        elif data == "wallet:refresh":
+            await self._cmd_wallet([], chat_id)
+
+        # Mode toggle flow (confirmation required for LIVE)
+        elif data == "mode:toggle":
+            await self._mode_prompt(chat_id, msg_id)
+        elif data == "mode:confirm_live":
+            await self._set_mode(False, chat_id, msg_id)
+        elif data == "mode:confirm_dry":
+            await self._set_mode(True, chat_id, msg_id)
+        elif data == "mode:cancel":
+            await self._send_dashboard(chat_id, edit_msg_id=msg_id)
+
+        # Settings editor
+        elif data == "settings:open":
+            await self._send_settings(chat_id, edit_msg_id=msg_id)
+        elif data.startswith("edit:"):
             key = data.split(":", 1)[1]
             await self._prompt_setting_edit(key, chat_id, msg_id)
         elif data.startswith("val:"):
             _, key, val = data.split(":", 2)
-            await self._apply_setting(key, val, chat_id)
+            await self._apply_setting(key, val, chat_id, edit_msg_id=msg_id)
         elif data.startswith("type:"):
             key = data.split(":", 1)[1]
             self._pending_edit[chat_id] = key
@@ -400,18 +506,16 @@ class CommandBot:
                 chat_id=chat_id,
             )
         elif data == "back":
-            await self._send_dashboard(chat_id, edit_msg_id=msg_id)
-        elif data == "toggle_mode":
-            await self._toggle_mode(chat_id)
-        elif data == "toggle_run":
-            await self._toggle_run(chat_id)
+            await self._send_settings(chat_id, edit_msg_id=msg_id)
 
     # ── /setwallet flow ────────────────────────────────────
     async def _do_setwallet(self, private_key: str, chat_id: str) -> None:
         try:
             from eth_account import Account
         except ImportError:
-            await self.notifier.send_text("eth_account not installed.", chat_id=chat_id)
+            await self.notifier.send_text(
+                "eth_account not installed.", chat_id=chat_id
+            )
             return
 
         pk = private_key.strip()
@@ -437,14 +541,12 @@ class CommandBot:
         except Exception:
             pass
 
-        # Balances (never block on RPC failure — just report 0)
         try:
             usdc, pol = await fetch_balances(address)
         except Exception as exc:
             log.warning("balance fetch failed: %s", exc)
             usdc, pol = 0.0, 0.0
 
-        # Derive Polymarket API credentials
         api_key = api_secret = api_pass = ""
         try:
             api_key, api_secret, api_pass = await asyncio.to_thread(
@@ -458,7 +560,6 @@ class CommandBot:
                 chat_id=chat_id,
             )
 
-        # Persist to .env (NEVER log the private key)
         updates = {
             "POLYGON_PRIVATE_KEY": pk,
             "POLYGON_PUBLIC_KEY": address,
@@ -472,7 +573,6 @@ class CommandBot:
         except Exception as exc:
             log.warning("env write failed: %s", exc)
 
-        # Update in-memory config
         config.POLYGON_PRIVATE_KEY = pk
         config.POLYGON_PUBLIC_KEY = address
         if api_key:
@@ -480,7 +580,6 @@ class CommandBot:
             config.POLYMARKET_API_SECRET = api_secret
             config.POLYMARKET_PASSPHRASE = api_pass
 
-        # Force executor re-init on next trade
         try:
             self.executor._client = None  # type: ignore[attr-defined]
         except Exception:
@@ -491,11 +590,12 @@ class CommandBot:
             except Exception as exc:
                 log.warning("reload_wallet failed: %s", exc)
 
-        short = f"{address[:6]}...{address[-4:]}"
         text = (
-            f"✅ <b>Wallet connected</b>: <code>{short}</code>\n"
-            f"USDC: <b>${usdc:,.2f}</b>\n"
-            f"POL:  <b>{pol:,.4f}</b>\n"
+            f"✅ <b>Wallet connected</b>\n"
+            f"<code>{_short_addr(address)}</code>\n"
+            f"{BAR}\n"
+            f"💵 USDC: <b>${usdc:,.2f}</b>\n"
+            f"⛽ POL:  <b>{pol:,.4f}</b>\n"
             + ("🔑 Polymarket API credentials derived.\n" if api_key else "")
             + "\nUse /start to open the dashboard."
         )
@@ -506,7 +606,8 @@ class CommandBot:
 
     # ── /start dashboard ───────────────────────────────────
     async def _cmd_start(self, args, chat_id):
-        if not config.POLYGON_PRIVATE_KEY or config.POLYGON_PRIVATE_KEY.startswith("0x_your"):
+        pk = config.POLYGON_PRIVATE_KEY or ""
+        if not pk or pk.startswith("0x_your"):
             await self._send_wizard(chat_id)
             return
         await self._send_dashboard(chat_id)
@@ -514,24 +615,26 @@ class CommandBot:
     async def _send_wizard(self, chat_id: str) -> None:
         text = (
             "👋 <b>Welcome to Polymarket 5m BTC Bot</b>\n"
-            "━━━━━━━━━━━━━━━━━━━━\n"
+            f"{BAR}\n"
             "<b>Setup (1 step):</b>\n"
             "Send your Polygon private key with:\n"
             "<code>/setwallet 0xYOUR_PRIVATE_KEY</code>\n\n"
             "🔒 Your message is <b>deleted immediately</b> after receipt.\n"
-            "• Public address is derived on-device\n"
-            "• USDC + POL balances are fetched from Polygon\n"
-            "• Polymarket API credentials are auto-generated\n"
-            "• Everything is saved to .env — no manual editing\n\n"
+            "• Public address derived on-device\n"
+            "• USDC + POL balances fetched from Polygon\n"
+            "• Polymarket API credentials auto-generated\n"
+            "• Everything saved to .env — no manual editing\n\n"
             "Your private key is <b>never</b> logged or shown in any message."
         )
         await self.notifier.send_text(text, chat_id=chat_id)
 
-    async def _send_dashboard(self, chat_id: str, edit_msg_id: Optional[int] = None) -> None:
-        status = "⏸ PAUSED" if config.RUNTIME.paused else "🟢 RUNNING"
+    async def _send_dashboard(
+        self, chat_id: str, edit_msg_id: Optional[int] = None
+    ) -> None:
+        paused = config.RUNTIME.paused
+        status = "⏸ PAUSED" if paused else "🟢 RUNNING"
         mode = "🧪 DRY-RUN" if config.RUNTIME.dry_run else "💸 LIVE"
-        addr = config.POLYGON_PUBLIC_KEY or "(not set)"
-        short = f"{addr[:6]}...{addr[-4:]}" if addr.startswith("0x") and len(addr) >= 10 else addr
+        addr = config.POLYGON_PUBLIC_KEY or ""
 
         usdc = pol = 0.0
         if addr.startswith("0x") and len(addr) == 42:
@@ -547,35 +650,68 @@ class CommandBot:
         text = (
             f"🏠 <b>DASHBOARD</b>\n"
             f"{status} · {mode}\n"
-            f"━━━━━━━━━━━━━━\n"
-            f"Wallet: <code>{short}</code>\n"
-            f"USDC: ${usdc:,.2f} · POL: {pol:,.4f}\n"
-            f"━━━━━━━━━━━━━━\n"
-            f"Session PnL: <b>{session_pnl:+.2f}</b>\n"
-            f"Today: {t['pnl']:+.2f} · {t['trades']}t · WR {t['win_rate']}%\n"
+            f"{BAR}\n"
+            f"👛 <code>{_short_addr(addr)}</code>\n"
+            f"💵 ${usdc:,.2f} · ⛽ {pol:,.4f}\n"
+            f"{BAR}\n"
+            f"Session:  <b>{session_pnl:+.2f}</b> {_ico(session_pnl)}\n"
+            f"Today:    {t['pnl']:+.2f} · {t['trades']}t · WR {t['win_rate']}%\n"
             f"All-time: {a['pnl']:+.2f} · {a['trades']}t · WR {a['win_rate']}%\n"
-            f"━━━━━━━━━━━━━━\n"
-            f"<b>Settings</b> (tap to change):"
+            f"Balance:  ${a['current_balance']:.2f} (ROI {a['roi_pct']:+.1f}%)\n"
+            f"{BAR}\n"
+            f"Pick an action:"
         )
 
-        kb_rows = []
+        kb = {"inline_keyboard": [
+            [
+                {"text": "▶️ Start Trading", "callback_data": "nav:go"},
+                {"text": "⏸ Stop Trading",  "callback_data": "nav:stop"},
+            ],
+            [
+                {"text": "📊 Stats",  "callback_data": "nav:stats"},
+                {"text": "💰 PnL",    "callback_data": "nav:pnl"},
+            ],
+            [
+                {"text": "📋 Trades", "callback_data": "nav:trades"},
+                {"text": "📈 Chart",  "callback_data": "nav:chart"},
+            ],
+            [
+                {"text": "⚙️ Settings", "callback_data": "nav:settings"},
+                {"text": "👛 Wallet",   "callback_data": "nav:wallet"},
+            ],
+        ]}
+
+        if edit_msg_id is not None:
+            await self.notifier.edit_text(chat_id, edit_msg_id, text, reply_markup=kb)
+        else:
+            await self.notifier.send_text(text, chat_id=chat_id, reply_markup=kb)
+
+    # ── /settings ──────────────────────────────────────────
+    async def _cmd_settings(self, args, chat_id):
+        await self._send_settings(chat_id)
+
+    async def _send_settings(
+        self, chat_id: str, edit_msg_id: Optional[int] = None
+    ) -> None:
+        text = (
+            "⚙️ <b>SETTINGS</b>\n"
+            f"{BAR}\n"
+            "Tap a setting to change its value.\n"
+            "Changes persist to <code>.env</code>."
+        )
+        rows = []
         for key, spec in SETTINGS_SPEC.items():
             cur = spec["current"]()
-            kb_rows.append([{
+            rows.append([{
                 "text": f"{spec['label']}: {cur}",
                 "callback_data": f"edit:{key}",
             }])
-        kb_rows.append([
-            {"text": "🧪 Toggle mode", "callback_data": "toggle_mode"},
-            {"text": ("▶️ Start" if config.RUNTIME.paused else "⏸ Stop"),
-             "callback_data": "toggle_run"},
-        ])
-        markup = {"inline_keyboard": kb_rows}
-
+        rows.append([{"text": "⬅️ Dashboard", "callback_data": "nav:dashboard"}])
+        kb = {"inline_keyboard": rows}
         if edit_msg_id is not None:
-            await self.notifier.edit_text(chat_id, edit_msg_id, text, reply_markup=markup)
+            await self.notifier.edit_text(chat_id, edit_msg_id, text, reply_markup=kb)
         else:
-            await self.notifier.send_text(text, chat_id=chat_id, reply_markup=markup)
+            await self.notifier.send_text(text, chat_id=chat_id, reply_markup=kb)
 
     async def _prompt_setting_edit(self, key: str, chat_id: str, msg_id: int) -> None:
         spec = SETTINGS_SPEC.get(key)
@@ -598,22 +734,31 @@ class CommandBot:
             rows.append(row)
         rows.append([
             {"text": "✏️ Custom…", "callback_data": f"type:{key}"},
-            {"text": "⬅️ Back", "callback_data": "back"},
+            {"text": "⬅️ Back",    "callback_data": "back"},
         ])
         await self.notifier.edit_text(
             chat_id, msg_id, text, reply_markup={"inline_keyboard": rows}
         )
 
-    async def _apply_setting(self, key: str, raw_value: str, chat_id: str) -> None:
+    async def _apply_setting(
+        self,
+        key: str,
+        raw_value: str,
+        chat_id: str,
+        edit_msg_id: Optional[int] = None,
+    ) -> None:
         spec = SETTINGS_SPEC.get(key)
         if not spec:
-            await self.notifier.send_text(f"Unknown setting: {key}", chat_id=chat_id)
+            await self.notifier.send_text(
+                f"Unknown setting: {key}", chat_id=chat_id
+            )
             return
         try:
             parsed = spec["parser"](raw_value)
         except ValueError:
             await self.notifier.send_text(
-                f"❌ '{raw_value}' is not a valid {spec['parser'].__name__}.",
+                f"❌ '{raw_value}' is not a valid "
+                f"{spec['parser'].__name__}.",
                 chat_id=chat_id,
             )
             return
@@ -621,49 +766,88 @@ class CommandBot:
             spec["apply"](parsed)
             update_env_file({spec["env"]: str(parsed)})
         except Exception as exc:
-            await self.notifier.send_text(f"❌ Failed to apply: {exc}", chat_id=chat_id)
+            await self.notifier.send_text(
+                f"❌ Failed to apply: {exc}", chat_id=chat_id
+            )
             return
         await self.notifier.send_text(
-            f"✅ <b>{spec['label']}</b> set to <b>{parsed}</b>", chat_id=chat_id
+            f"✅ <b>{spec['label']}</b> set to <b>{parsed}</b>",
+            chat_id=chat_id,
         )
-        await self._send_dashboard(chat_id)
+        await self._send_settings(chat_id, edit_msg_id=edit_msg_id)
 
     # ── Trading control ────────────────────────────────────
     async def _cmd_go(self, args, chat_id):
         config.RUNTIME.paused = False
-        await self.notifier.send_text("▶️ Bot running. Good hunting.", chat_id=chat_id)
+        await self.notifier.send_text(
+            "▶️ <b>Bot running.</b> Good hunting.", chat_id=chat_id
+        )
 
     async def _cmd_stop(self, args, chat_id):
         config.RUNTIME.paused = True
-        await self.notifier.send_text("⏸ Bot stopped. Use /go to resume.", chat_id=chat_id)
-
-    async def _toggle_run(self, chat_id: str) -> None:
-        config.RUNTIME.paused = not config.RUNTIME.paused
-        await self._send_dashboard(chat_id)
+        await self.notifier.send_text(
+            "⏸ <b>Bot stopped.</b> Use /go to resume.", chat_id=chat_id
+        )
 
     async def _cmd_mode(self, args, chat_id):
-        await self._toggle_mode(chat_id)
+        await self._mode_prompt(chat_id, None)
 
-    async def _toggle_mode(self, chat_id: str) -> None:
-        config.RUNTIME.dry_run = not config.RUNTIME.dry_run
+    async def _mode_prompt(self, chat_id: str, msg_id: Optional[int]) -> None:
+        currently_dry = config.RUNTIME.dry_run
+        if currently_dry:
+            text = (
+                "💸 <b>Switch to LIVE mode?</b>\n"
+                f"{BAR}\n"
+                "You are currently in 🧪 DRY-RUN.\n"
+                "LIVE mode places <b>real orders</b> with real USDC.\n\n"
+                "Confirm to continue."
+            )
+            kb = {"inline_keyboard": [[
+                {"text": "💸 Yes, go LIVE", "callback_data": "mode:confirm_live"},
+                {"text": "❌ Cancel",        "callback_data": "mode:cancel"},
+            ]]}
+        else:
+            text = (
+                "🧪 <b>Switch to DRY-RUN?</b>\n"
+                f"{BAR}\n"
+                "You are currently in 💸 LIVE.\n"
+                "DRY-RUN simulates trades — no real orders."
+            )
+            kb = {"inline_keyboard": [[
+                {"text": "🧪 Yes, DRY-RUN", "callback_data": "mode:confirm_dry"},
+                {"text": "❌ Cancel",         "callback_data": "mode:cancel"},
+            ]]}
+        if msg_id is not None:
+            await self.notifier.edit_text(chat_id, msg_id, text, reply_markup=kb)
+        else:
+            await self.notifier.send_text(text, chat_id=chat_id, reply_markup=kb)
+
+    async def _set_mode(self, dry_run: bool, chat_id: str, msg_id: int) -> None:
+        config.RUNTIME.dry_run = dry_run
         if self.trading_bot is not None and hasattr(self.trading_bot, "set_dry_run"):
             try:
-                self.trading_bot.set_dry_run(config.RUNTIME.dry_run)
+                self.trading_bot.set_dry_run(dry_run)
             except Exception as exc:
                 log.warning("set_dry_run failed: %s", exc)
-        mode = "🧪 DRY-RUN" if config.RUNTIME.dry_run else "💸 LIVE"
-        await self.notifier.send_text(f"Mode: <b>{mode}</b>", chat_id=chat_id)
+        mode = "🧪 DRY-RUN" if dry_run else "💸 LIVE"
+        await self.notifier.edit_text(
+            chat_id, msg_id, f"✅ Mode set to <b>{mode}</b>"
+        )
+        await self._send_dashboard(chat_id)
 
     async def _cmd_pause(self, args, chat_id):
-        import time as _t
-        self.risk.state.cooldown_until = _t.time() + 30 * 60
+        self.risk.state.cooldown_until = time.time() + 30 * 60
         self.risk.state.cooldown_reason = "manual /pause"
-        await self.notifier.send_text("⏸ Cooldown 30 min applied.", chat_id=chat_id)
+        await self.notifier.send_text(
+            "⏸ <b>30 min cooldown</b> applied.\n"
+            "Trading will auto-resume after the cooldown.",
+            chat_id=chat_id,
+        )
 
     # ── Info commands ──────────────────────────────────────
     async def _cmd_wallet(self, args, chat_id):
-        addr = config.POLYGON_PUBLIC_KEY
-        if not addr or not addr.startswith("0x"):
+        addr = config.POLYGON_PUBLIC_KEY or ""
+        if not addr.startswith("0x"):
             await self.notifier.send_text(
                 "No wallet set. Use <code>/setwallet 0x...</code>",
                 chat_id=chat_id,
@@ -672,22 +856,30 @@ class CommandBot:
         try:
             usdc, pol = await fetch_balances(addr)
         except Exception as exc:
-            await self.notifier.send_text(f"Balance fetch failed: {exc}", chat_id=chat_id)
+            await self.notifier.send_text(
+                f"Balance fetch failed: {exc}", chat_id=chat_id
+            )
             return
-        short = f"{addr[:6]}...{addr[-4:]}"
-        await self.notifier.send_text(
-            f"💼 <b>Wallet</b>: <code>{short}</code>\n"
-            f"USDC: <b>${usdc:,.2f}</b>\n"
-            f"POL:  <b>{pol:,.4f}</b>",
-            chat_id=chat_id,
+        text = (
+            f"👛 <b>WALLET</b>\n"
+            f"{BAR}\n"
+            f"Address:\n<code>{addr}</code>\n\n"
+            f"💵 USDC: <b>${usdc:,.2f}</b>\n"
+            f"⛽ POL:  <b>{pol:,.4f}</b>"
         )
+        kb = {"inline_keyboard": [[
+            {"text": "🔄 Refresh",    "callback_data": "wallet:refresh"},
+            {"text": "⬅️ Dashboard", "callback_data": "nav:dashboard"},
+        ]]}
+        await self.notifier.send_text(text, chat_id=chat_id, reply_markup=kb)
 
     async def _cmd_status(self, args, chat_id):
         tb = self.trading_bot
         state = getattr(tb, "state", None) if tb else None
         if state is None or state.window is None:
             await self.notifier.send_text(
-                "No live window. Bot idle or between windows.", chat_id=chat_id
+                "📡 No live window. Bot is idle or between windows.",
+                chat_id=chat_id,
             )
             return
         w = state.window
@@ -698,10 +890,12 @@ class CommandBot:
         dn = state.token_down_price or 0.0
         await self.notifier.send_text(
             f"📡 <b>LIVE WINDOW</b> — {w.slug}\n"
-            f"T-{w.seconds_remaining}s remaining\n"
-            f"Price-to-beat: ${ptb:,.2f} ({w.price_source or 'n/a'})\n"
-            f"BTC now: ${btc:,.2f} (Δ{delta:+.3f}%)\n"
-            f"UP ask: ${up:.3f} · DOWN ask: ${dn:.3f}\n"
+            f"{BAR}\n"
+            f"⏱ T-{w.seconds_remaining}s remaining\n"
+            f"🎯 Price-to-beat: ${ptb:,.2f} ({w.price_source or 'n/a'})\n"
+            f"₿ BTC now: ${btc:,.2f} (Δ{delta:+.3f}%)\n"
+            f"🟢 UP ask:   ${up:.3f}\n"
+            f"🔴 DOWN ask: ${dn:.3f}\n"
             f"Signal: <b>{state.signal}</b>",
             chat_id=chat_id,
         )
@@ -709,35 +903,60 @@ class CommandBot:
     async def _cmd_pnl(self, args, chat_id):
         t = self.pnl.today_stats()
         w = self.pnl.week_stats()
+        m = self._month_stats()
         a = self.pnl.alltime_stats()
         sess = self.risk.state.session_pnl
-        def ico(x): return "📈" if x >= 0 else "📉"
         await self.notifier.send_text(
-            f"💰 <b>PNL</b>\n"
-            f"Session:   {sess:+.2f} {ico(sess)}\n"
-            f"Today:     {t['pnl']:+.2f} {ico(t['pnl'])} ({t['trades']}t)\n"
-            f"This Week: {w['pnl']:+.2f} {ico(w['pnl'])}\n"
-            f"All Time:  {a['pnl']:+.2f} {ico(a['pnl'])}",
+            f"💰 <b>PnL SUMMARY</b>\n"
+            f"{BAR}\n"
+            f"Session:   <b>{sess:+.2f}</b> {_ico(sess)}\n"
+            f"Today:     {t['pnl']:+.2f} {_ico(t['pnl'])} "
+            f"({t['trades']}t · WR {t['win_rate']}%)\n"
+            f"This Week: {w['pnl']:+.2f} {_ico(w['pnl'])} "
+            f"({w['trades']}t · WR {w['win_rate']}%)\n"
+            f"30 Days:   {m['pnl']:+.2f} {_ico(m['pnl'])} "
+            f"({m['trades']}t · WR {m['win_rate']}%)\n"
+            f"All Time:  {a['pnl']:+.2f} {_ico(a['pnl'])} "
+            f"({a['trades']}t · WR {a['win_rate']}%)\n"
+            f"{BAR}\n"
+            f"Balance: <b>${a['current_balance']:.2f}</b> "
+            f"(ROI {a['roi_pct']:+.1f}%)",
             chat_id=chat_id,
         )
 
-    async def _cmd_dashboard(self, args, chat_id):
-        await self._send_dashboard(chat_id)
+    def _month_stats(self) -> Dict[str, Any]:
+        cutoff = time.time() - 30 * 86400
+        trades = [
+            t for t in getattr(self.pnl, "_resolved", [])
+            if t.get("ts", 0) >= cutoff
+        ]
+        return self.pnl._stats(trades)
 
-    async def _cmd_chart(self, args, chat_id):
-        from utils.chart_generator import generate_pnl_chart
-        png = generate_pnl_chart(
-            self.pnl.equity_curve(),
-            self.pnl.daily_pnl_series(),
-            self.pnl.rolling_win_rate(),
+    async def _cmd_stats(self, args, chat_id):
+        t = self.pnl.today_stats()
+        a = self.pnl.alltime_stats()
+        streak = self.pnl.current_streak()
+        text = (
+            f"📊 <b>FULL STATISTICS</b>\n"
+            f"{BAR}\n"
+            f"{_fmt_stats_block('Today', t)}\n"
+            f"{BAR}\n"
+            f"{_fmt_stats_block('All-time', a)}\n"
+            f"{BAR}\n"
+            f"Balance:     <b>${a['current_balance']:.2f}</b>\n"
+            f"Starting:    ${a['starting_balance']:.2f}\n"
+            f"ROI:         {a['roi_pct']:+.2f}%\n"
+            f"Max DD:      {a['max_drawdown']:+.2f}\n"
+            f"Sharpe (d):  {a['sharpe_daily']}\n"
+            f"Best day:    {a['best_day']:+.2f}\n"
+            f"Worst day:   {a['worst_day']:+.2f}\n"
+            f"Days active: {a['days_active']}\n"
+            f"Streak:      {streak}"
         )
-        if png is None:
-            await self.notifier.send_text("No data yet for chart.", chat_id=chat_id)
-            return
-        await self.notifier.send_photo(png, caption="📈 Performance chart")
+        await self.notifier.send_text(text, chat_id=chat_id)
 
     async def _cmd_trades(self, args, chat_id):
-        n = 5
+        n = 10
         if args:
             try:
                 n = max(1, min(20, int(args[0])))
@@ -745,11 +964,15 @@ class CommandBot:
                 pass
         trades = self.pnl.recent_trades(n)
         if not trades:
-            await self.notifier.send_text("No trades yet.", chat_id=chat_id)
+            await self.notifier.send_text(
+                "📋 No trades yet.", chat_id=chat_id
+            )
             return
-        lines = [f"📋 <b>LAST {len(trades)} TRADES</b>"]
+        lines = [f"📋 <b>LAST {len(trades)} TRADES</b>", BAR]
         for i, tr in enumerate(trades, 1):
-            ts = datetime.utcfromtimestamp(tr.get("ts", 0)).strftime("%H:%M")
+            ts = datetime.fromtimestamp(
+                tr.get("ts", 0), tz=timezone.utc
+            ).strftime("%m/%d %H:%M")
             side = tr.get("side", "?")
             price = tr.get("entry_price", 0)
             pnl = tr.get("pnl", 0)
@@ -760,35 +983,93 @@ class CommandBot:
             trend = rl.get("delta_trend", "?")
             vol = rl.get("binance_volume", "?")
             lines.append(
-                f"{i}. {icon} {ts} — {side} @ ${price:.3f} → {pnl:+.2f}\n"
+                f"{i}. {icon} {ts} — <b>{side}</b> @ ${price:.3f} "
+                f"→ <b>{pnl:+.2f}</b>\n"
                 f"   Δ{delta:+.3f}% · score {score} · {trend}/{vol}"
             )
         await self.notifier.send_text("\n".join(lines), chat_id=chat_id)
+
+    async def _cmd_chart(self, args, chat_id):
+        try:
+            from utils.chart_generator import generate_pnl_chart
+        except Exception as exc:
+            await self.notifier.send_text(
+                f"Chart module unavailable: {exc}", chat_id=chat_id
+            )
+            return
+        png = generate_pnl_chart(
+            self.pnl.equity_curve(),
+            self.pnl.daily_pnl_series(),
+            self.pnl.rolling_win_rate(),
+        )
+        if png is None:
+            await self.notifier.send_text(
+                "📈 No data yet for chart.", chat_id=chat_id
+            )
+            return
+        a = self.pnl.alltime_stats()
+        caption = (
+            f"📈 <b>Performance</b>\n"
+            f"PnL: {a['pnl']:+.2f} · WR {a['win_rate']}% · "
+            f"Trades {a['trades']}"
+        )
+        await self.notifier.send_photo(png, caption=caption, chat_id=chat_id)
 
     async def _cmd_risk(self, args, chat_id):
         snap = self.risk.snapshot()
         allowed, why = self.risk.can_trade()
         gate = "✅ open" if allowed else f"⛔ blocked ({why})"
         await self.notifier.send_text(
-            f"🛡 <b>RISK</b>\n"
+            f"🛡 <b>RISK STATUS</b>\n"
+            f"{BAR}\n"
             f"Gate: {gate}\n"
-            f"Session PnL: {snap['session_pnl']:+.2f}\n"
-            f"Daily PnL:   {snap['daily_pnl']:+.2f}\n"
-            f"Trades today: {snap['trades_today']}\n"
+            f"{BAR}\n"
+            f"Session PnL:   {snap['session_pnl']:+.2f}\n"
+            f"Daily PnL:     {snap['daily_pnl']:+.2f}\n"
+            f"Trades today:  {snap['trades_today']}\n"
             f"Consec losses: {snap['consecutive_losses']}\n"
-            f"Cooldown: {snap['cooldown_remaining']}s ({snap['cooldown_reason'] or 'none'})",
+            f"Cooldown:      {snap['cooldown_remaining']}s "
+            f"({snap['cooldown_reason'] or 'none'})\n"
+            f"{BAR}\n"
+            f"<b>Limits</b>\n"
+            f"Max session loss: ${config.RUNTIME.max_session_loss:.2f}\n"
+            f"Max daily loss:   ${config.MAX_DAILY_LOSS_USD:.2f}\n"
+            f"Max daily trades: {config.MAX_DAILY_TRADES}\n"
+            f"Max consec loss:  {config.MAX_CONSECUTIVE_LOSSES}\n"
+            f"Min confidence:   {config.RUNTIME.min_confidence}",
             chat_id=chat_id,
         )
 
-    async def _cmd_set(self, args, chat_id):
-        if len(args) < 2:
-            keys = ", ".join(SETTINGS_SPEC.keys())
-            await self.notifier.send_text(
-                f"Usage: <code>/set KEY VALUE</code>\nKeys: {keys}",
-                chat_id=chat_id,
-            )
-            return
-        await self._apply_setting(args[0], args[1], chat_id)
+    async def _cmd_help(self, args, chat_id):
+        text = (
+            "❓ <b>HELP — Command List</b>\n"
+            f"{BAR}\n"
+            "<b>Main</b>\n"
+            "/start — Dashboard with buttons\n"
+            "/help  — This message\n"
+            f"{BAR}\n"
+            "<b>Wallet</b>\n"
+            "/wallet    — Address + balances\n"
+            "/setwallet — Set private key (auto-deleted)\n"
+            f"{BAR}\n"
+            "<b>Trading</b>\n"
+            "/go    — Start auto trading\n"
+            "/stop  — Stop auto trading\n"
+            "/mode  — Toggle DRY-RUN / LIVE\n"
+            "/pause — 30 min cooldown\n"
+            f"{BAR}\n"
+            "<b>Info</b>\n"
+            "/pnl    — Profit / loss summary\n"
+            "/stats  — Full statistics\n"
+            "/trades — Recent trades + reasons\n"
+            "/chart  — PnL chart image\n"
+            "/risk   — Risk status + limits\n"
+            "/status — Current live window\n"
+            f"{BAR}\n"
+            "<b>Config</b>\n"
+            "/settings — Edit settings with buttons"
+        )
+        await self.notifier.send_text(text, chat_id=chat_id)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -797,7 +1078,11 @@ class CommandBot:
 
 def _derive_clob_creds(private_key: str) -> Tuple[str, str, str]:
     from py_clob_client.client import ClobClient
-    client = ClobClient(host=config.CLOB_HOST, key=private_key, chain_id=config.POLYGON_CHAIN_ID)
+    client = ClobClient(
+        host=config.CLOB_HOST,
+        key=private_key,
+        chain_id=config.POLYGON_CHAIN_ID,
+    )
     creds = client.create_or_derive_api_creds()
     return (
         getattr(creds, "api_key", "") or "",

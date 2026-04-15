@@ -226,16 +226,24 @@ class TradingBot:
                 await asyncio.sleep(2)
 
     def _capture_price_to_beat(self, w: market.Window) -> Optional[float]:
-        """Try Chainlink first, fallback to Binance price at window open."""
-        ptb = self.chainlink.get_price_to_beat(w.window_start)
+        """Try Chainlink first, fallback to Binance price at exact window open."""
+        if not self.chainlink.disabled:
+            ptb = self.chainlink.get_price_to_beat(w.window_start)
+            if ptb is not None:
+                w.price_source = "chainlink"
+                log.info("price_to_beat=%.2f (chainlink)", ptb)
+                return ptb
+        # Fallback: Binance trade captured at/after the 300s-aligned boundary
+        ptb = self.binance.get_window_open_price(w.window_start)
         if ptb is not None:
-            w.price_source = "chainlink"
-            log.info("price_to_beat=%.2f (chainlink)", ptb)
+            w.price_source = "binance-open"
+            log.info("price_to_beat=%.2f (binance @ window open)", ptb)
             return ptb
+        # Last resort: current Binance price (stale window / just started)
         ptb = self.binance.get_price()
         if ptb is not None:
-            w.price_source = "binance-fallback"
-            log.info("price_to_beat=%.2f (binance fallback)", ptb)
+            w.price_source = "binance-current"
+            log.info("price_to_beat=%.2f (binance current)", ptb)
             return ptb
         log.warning("no price source available for %s", w.slug)
         return None
@@ -389,7 +397,10 @@ class TradingBot:
         await asyncio.sleep(wait_for)
 
         # Determine resolution using Chainlink if present, else Binance close
-        close_price = self.chainlink.latest_price or self.binance.get_price()
+        close_price = (
+            (self.chainlink.latest_price if not self.chainlink.disabled else None)
+            or self.binance.get_price()
+        )
         if close_price is None or w.price_to_beat is None:
             log.warning("cannot settle %s — missing prices", w.slug)
             return

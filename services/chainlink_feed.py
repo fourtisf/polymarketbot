@@ -23,7 +23,12 @@ log = logging.getLogger("chainlink")
 
 class ChainlinkFeed(AsyncReconnectingWS):
     def __init__(self):
-        super().__init__(config.POLYMARKET_RTDS_WS, name="chainlink")
+        super().__init__(
+            config.POLYMARKET_RTDS_WS,
+            name="chainlink",
+            optional=True,
+            max_failures=3,
+        )
         self.latest_price: Optional[float] = None
         self.latest_ts: float = 0.0
         # Map window_start (int) -> captured oracle price at/after that ts

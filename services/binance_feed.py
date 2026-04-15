@@ -17,7 +17,7 @@ import logging
 import statistics
 import time
 from collections import deque
-from typing import Deque, Optional, Tuple
+from typing import Deque, Dict, Optional, Tuple
 
 from core.websockets import AsyncReconnectingWS
 import config
@@ -36,6 +36,9 @@ class BinanceFeed(AsyncReconnectingWS):
         self._recent_deltas: Deque[Tuple[float, float]] = deque()
         # Baseline volumes per minute (for "high/normal/low")
         self._historical_volumes: Deque[float] = deque(maxlen=30)
+        # First price seen at/after each 300s-aligned window boundary.
+        # Used as price-to-beat fallback when Chainlink RTDS is unavailable.
+        self._window_open_prices: Dict[int, float] = {}
 
     async def on_message(self, msg) -> None:
         if not isinstance(msg, dict) or msg.get("e") != "trade":
@@ -50,6 +53,12 @@ class BinanceFeed(AsyncReconnectingWS):
         self.last_price_ts = ts
         self.trades_window.append((ts, price, qty))
         self._trim_window(ts)
+
+        window_start = int(ts) - (int(ts) % config.WINDOW_LENGTH_SECONDS)
+        self._window_open_prices.setdefault(window_start, price)
+        if len(self._window_open_prices) > 200:
+            for k in sorted(self._window_open_prices.keys())[:100]:
+                self._window_open_prices.pop(k, None)
 
     def _trim_window(self, now: float) -> None:
         cutoff = now - config.BINANCE_VOLUME_WINDOW_SECONDS
@@ -67,6 +76,10 @@ class BinanceFeed(AsyncReconnectingWS):
         if time.time() - self.last_price_ts > 10:
             return None
         return self.last_price
+
+    def get_window_open_price(self, window_start: int) -> Optional[float]:
+        """First Binance trade price at/after the given 300s-aligned window start."""
+        return self._window_open_prices.get(window_start)
 
     def get_delta_pct(self, price_to_beat: float) -> Optional[float]:
         p = self.get_price()

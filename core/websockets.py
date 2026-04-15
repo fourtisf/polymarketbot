@@ -14,7 +14,7 @@ import logging
 from typing import Any, Optional
 
 import websockets
-from websockets.exceptions import ConnectionClosed
+from websockets.exceptions import ConnectionClosed, InvalidHandshake, InvalidURI
 
 log = logging.getLogger("ws")
 
@@ -26,12 +26,27 @@ class AsyncReconnectingWS:
     Subclasses override:
       - subscribe_payload() -> dict | list | None (sent after connect)
       - on_message(msg) -> None (called for every decoded message)
+
+    If `optional=True`, the feed will permanently disable itself after
+    `max_failures` consecutive failed connects (e.g. persistent HTTP 404)
+    instead of retry-spamming forever. `.disabled` is set True so the
+    rest of the bot can check and use a fallback path.
     """
 
-    def __init__(self, url: str, name: str = "ws"):
+    def __init__(
+        self,
+        url: str,
+        name: str = "ws",
+        optional: bool = False,
+        max_failures: int = 5,
+    ):
         self.url = url
         self.name = name
         self.running = False
+        self.disabled = False
+        self.optional = optional
+        self.max_failures = max_failures
+        self._fail_count = 0
         self._ws: Optional[websockets.WebSocketClientProtocol] = None
         self._backoff = 1.0
         self._backoff_max = 30.0
@@ -55,6 +70,7 @@ class AsyncReconnectingWS:
     async def run(self) -> None:
         self.running = True
         while self.running:
+            connected = False
             try:
                 log.info("[%s] connecting to %s", self.name, self.url)
                 async with websockets.connect(
@@ -66,6 +82,8 @@ class AsyncReconnectingWS:
                 ) as ws:
                     self._ws = ws
                     self._backoff = 1.0
+                    self._fail_count = 0
+                    connected = True
                     await self.on_connect()
                     log.info("[%s] connected", self.name)
                     async for raw in ws:
@@ -77,13 +95,31 @@ class AsyncReconnectingWS:
                             await self.on_message(msg)
                         except Exception as exc:
                             log.exception("[%s] on_message error: %s", self.name, exc)
+            except (InvalidHandshake, InvalidURI) as exc:
+                # HTTP 404, 401, bad URI, etc. — endpoint is likely gone.
+                self._fail_count += 1
+                log.warning("[%s] handshake failed (%s) [%d/%d]",
+                            self.name, exc, self._fail_count, self.max_failures)
             except (ConnectionClosed, OSError, asyncio.TimeoutError) as exc:
+                if not connected:
+                    self._fail_count += 1
                 log.warning("[%s] disconnected: %s", self.name, exc)
             except Exception as exc:
+                if not connected:
+                    self._fail_count += 1
                 log.exception("[%s] unexpected error: %s", self.name, exc)
             finally:
                 self._ws = None
             if not self.running:
+                break
+            if self.optional and self._fail_count >= self.max_failures:
+                self.disabled = True
+                self.running = False
+                log.warning(
+                    "[%s] giving up after %d failed connects — "
+                    "feed disabled, bot will use fallback",
+                    self.name, self._fail_count,
+                )
                 break
             await asyncio.sleep(self._backoff)
             self._backoff = min(self._backoff * 2, self._backoff_max)
