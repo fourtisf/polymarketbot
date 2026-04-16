@@ -156,6 +156,10 @@ class TradingBot:
         self._tasks.append(asyncio.create_task(self._trading_loop(), name="trading"))
         self._tasks.append(asyncio.create_task(self._live_state_loop(), name="live_state"))
 
+        # Background task: periodically sweep proxy wallet USDC.e to EOA
+        if not self.dry_run:
+            self._tasks.append(asyncio.create_task(self._proxy_sweep_loop(), name="proxy_sweep"))
+
         mode = "DRY-RUN" if self.dry_run else "LIVE"
         await self.notifier.send_text(
             f"🚀 <b>Bot started</b> ({mode})\n"
@@ -608,17 +612,51 @@ class TradingBot:
         self.state.entry_record = None
         self.state.entered_this_window = False
 
+    async def _proxy_sweep_loop(self) -> None:
+        """Periodically sweep USDC.e from proxy wallet to EOA.
+
+        Polymarket may auto-redeem winning positions, depositing USDC.e
+        into the proxy wallet. This background task ensures that money
+        is transferred to the EOA every 3 minutes.
+        """
+        await asyncio.sleep(30)  # Initial delay
+        while not self._stopping:
+            try:
+                tx = await self.executor.withdraw_proxy_usdc()
+                if tx:
+                    bal_str = ""
+                    try:
+                        usdc_bal, _, _ = await fetch_all_usdc(config.POLYGON_PUBLIC_KEY)
+                        bal_str = f"\n💵 USDC.e: <b>${usdc_bal:,.2f}</b>"
+                    except Exception:
+                        pass
+                    await self.notifier.send_text(
+                        f"💸 <b>Proxy sweep: USDC.e withdrawn to EOA</b>\n"
+                        f"TX: {tx_link_html(tx)}"
+                        f"{bal_str}"
+                    )
+            except Exception as exc:
+                log.debug("proxy sweep: %s", exc)
+            await asyncio.sleep(180)  # Every 3 minutes
+
     async def _auto_redeem(self, condition_id: str,
                           neg_risk: bool = True) -> None:
         """Redeem winning conditional tokens → USDC.e with retries.
 
         The on-chain oracle may take a few seconds to report the resolution,
-        so we retry up to 3 times with increasing delays.
-        After successful redeem, also withdraw any USDC.e stuck in proxy wallet.
+        so we retry up to 5 times with increasing delays (up to ~2 minutes).
+        After successful redeem, also withdraw any USDC.e from proxy wallet.
         """
-        for attempt in range(3):
-            # Wait for oracle to report on-chain resolution
-            await asyncio.sleep(10 + attempt * 15)
+        await self.notifier.send_text(
+            f"🔄 <b>Auto-redeem started</b>\n"
+            f"Condition: <code>{condition_id[:20]}</code>\n"
+            f"NegRisk: {neg_risk}"
+        )
+
+        for attempt in range(5):
+            # Wait for oracle — longer delays for later attempts
+            delay = 10 + attempt * 20  # 10s, 30s, 50s, 70s, 90s
+            await asyncio.sleep(delay)
             try:
                 tx_hash = await self.executor.redeem_positions(
                     condition_id, neg_risk=neg_risk
@@ -627,14 +665,13 @@ class TradingBot:
                     # After redeem, withdraw USDC.e from proxy wallet to EOA
                     withdraw_tx = None
                     try:
-                        await asyncio.sleep(3)  # Wait for state to settle
+                        await asyncio.sleep(5)
                         withdraw_tx = await self.executor.withdraw_proxy_usdc()
                         if withdraw_tx:
                             log.info("proxy USDC.e withdrawn: tx=%s", withdraw_tx)
                     except Exception as exc:
                         log.warning("proxy USDC.e withdrawal failed: %s", exc)
 
-                    # Fetch new balance after redeem + withdrawal
                     bal_str = ""
                     try:
                         usdc_bal, _, _ = await fetch_all_usdc(config.POLYGON_PUBLIC_KEY)
@@ -645,19 +682,17 @@ class TradingBot:
                     if withdraw_tx:
                         withdraw_line = f"\n💸 Proxy→EOA: {tx_link_html(withdraw_tx)}"
                     await self.notifier.send_text(
-                        f"💰 <b>Tokens redeemed</b>\n"
+                        f"💰 <b>Tokens redeemed</b> (attempt {attempt+1})\n"
                         f"TX: {tx_link_html(tx_hash)}"
                         f"{withdraw_line}"
                         f"{bal_str}"
                     )
                     return
-                log.info("redeem attempt %d: no tx (oracle may not have reported yet)", attempt + 1)
+                log.info("redeem attempt %d/%d: no tx yet", attempt + 1, 5)
             except Exception as exc:
-                log.warning("redeem attempt %d failed: %s", attempt + 1, exc)
+                log.warning("redeem attempt %d/%d failed: %s", attempt + 1, 5, exc)
 
-        # All redeem attempts failed — still try to withdraw proxy USDC
-        # (previous redeems by the Telegram /redeem command or website may have
-        # left USDC.e sitting in the proxy wallet)
+        # All redeem attempts failed — try proxy USDC withdrawal as fallback
         try:
             withdraw_tx = await self.executor.withdraw_proxy_usdc()
             if withdraw_tx:
@@ -676,9 +711,9 @@ class TradingBot:
         except Exception as exc:
             log.warning("proxy withdrawal fallback failed: %s", exc)
 
-        log.warning("auto-redeem failed after 3 attempts for condition %s", condition_id[:16])
+        log.warning("auto-redeem failed after 5 attempts for condition %s", condition_id[:16])
         await self.notifier.send_text(
-            f"⚠️ Auto-redeem failed after 3 attempts.\n"
+            f"⚠️ Auto-redeem failed after 5 attempts.\n"
             f"Condition: <code>{condition_id[:20]}</code>\n"
             f"Try /redeem or run: python3 scripts/redeem_all.py"
         )
