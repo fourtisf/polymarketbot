@@ -1,13 +1,12 @@
 """
-Strategy engine v2 — confidence scoring and trade decision.
+Strategy engine v3 — dynamic edge-based entry.
 
-Key changes from v1:
-- Max entry price 55c (was 95c) for better risk/reward
-- Entry window T-30 to T-8 (was T-60 to T-5) — enter LATE for certainty
-- Higher min delta 0.08% (was 0.05%) — need CLEAR direction
-- Require non-reversing trend
-- EV-aware scoring: penalizes expensive tokens heavily
-- Stricter scoring weights favoring late + strong signals
+Key improvements over v2:
+- Dynamic max price based on signal strength (not fixed cap)
+- Strong signal + late entry → allows up to 62c (fills more often)
+- Weak signal → strict 52c cap (only enter with great edge)
+- EV-positive math: each price tier requires matching win rate
+- Better fill rate without sacrificing profitability
 """
 
 from dataclasses import dataclass, field
@@ -40,10 +39,29 @@ class TradeDecision:
     reason_log: dict = field(default_factory=dict)
 
 
-MAX_ENTRY_PRICE = 0.55
+ABSOLUTE_MAX_PRICE = 0.62
 MIN_DELTA_HARD = 0.08
 ENTRY_WINDOW_START = 30
 ENTRY_WINDOW_END = 8
+
+
+def _dynamic_max_price(abs_delta: float, seconds_remaining: int,
+                       delta_trend: str) -> float:
+    if abs_delta >= 0.20 and seconds_remaining <= 15:
+        cap = 0.62
+    elif abs_delta >= 0.15 and seconds_remaining <= 20:
+        cap = 0.60
+    elif abs_delta >= 0.10:
+        cap = 0.57
+    elif abs_delta >= 0.08:
+        cap = 0.53
+    else:
+        cap = 0.50
+
+    if delta_trend == "choppy":
+        cap -= 0.03
+
+    return min(cap, ABSOLUTE_MAX_PRICE)
 
 
 def calculate_confidence(
@@ -58,50 +76,46 @@ def calculate_confidence(
 
     abs_delta = abs(delta_pct)
 
-    # Delta scoring — stronger move = higher certainty
-    if abs_delta >= 0.20:
-        score += 40
-        reasons.append(f"Delta {abs_delta:.3f}% = VERY STRONG (+40)")
-    elif abs_delta >= 0.15:
-        score += 35
-        reasons.append(f"Delta {abs_delta:.3f}% = STRONG (+35)")
-    elif abs_delta >= 0.10:
-        score += 25
-        reasons.append(f"Delta {abs_delta:.3f}% = SOLID (+25)")
+    if abs_delta >= 0.25:
+        score += 45
+        reasons.append(f"Delta {abs_delta:.3f}% = EXTREME (+45)")
+    elif abs_delta >= 0.18:
+        score += 38
+        reasons.append(f"Delta {abs_delta:.3f}% = VERY STRONG (+38)")
+    elif abs_delta >= 0.12:
+        score += 28
+        reasons.append(f"Delta {abs_delta:.3f}% = STRONG (+28)")
     elif abs_delta >= 0.08:
         score += 15
         reasons.append(f"Delta {abs_delta:.3f}% = MODERATE (+15)")
     else:
         reasons.append(f"Delta {abs_delta:.3f}% = TOO WEAK (+0)")
 
-    # Time scoring — LATER is BETTER (less time for reversal)
-    if seconds_remaining <= 12:
+    if seconds_remaining <= 10:
         score += 30
         reasons.append(f"{seconds_remaining}s left = near-certain (+30)")
-    elif seconds_remaining <= 18:
+    elif seconds_remaining <= 15:
         score += 25
         reasons.append(f"{seconds_remaining}s left = very safe (+25)")
-    elif seconds_remaining <= 25:
+    elif seconds_remaining <= 22:
         score += 18
         reasons.append(f"{seconds_remaining}s left = safe (+18)")
     elif seconds_remaining <= 30:
         score += 10
-        reasons.append(f"{seconds_remaining}s left = risky (+10)")
+        reasons.append(f"{seconds_remaining}s left = early (+10)")
     else:
         reasons.append(f"{seconds_remaining}s left = TOO EARLY (+0)")
 
-    # Trend — MUST be consistent for high score
     if delta_trend == "consistent":
         score += 20
         reasons.append("Trend CONSISTENT (+20)")
     elif delta_trend == "choppy":
-        score += 5
-        reasons.append("Trend CHOPPY (+5)")
+        score += 3
+        reasons.append("Trend CHOPPY (+3)")
     else:
-        score -= 10
-        reasons.append("Trend REVERSING (-10)")
+        score -= 15
+        reasons.append("Trend REVERSING (-15)")
 
-    # Volume — high volume = momentum more likely to hold
     if binance_volume == "high":
         score += 10
         reasons.append("Volume HIGH (+10)")
@@ -111,19 +125,18 @@ def calculate_confidence(
     else:
         reasons.append("Volume LOW (+0)")
 
-    # Price scoring — CHEAPER is MUCH better
-    if token_price <= 0.40:
-        score += 15
-        reasons.append(f"Price ${token_price:.2f} = excellent edge (+15)")
-    elif token_price <= 0.47:
-        score += 10
-        reasons.append(f"Price ${token_price:.2f} = good edge (+10)")
-    elif token_price <= 0.52:
-        score += 5
-        reasons.append(f"Price ${token_price:.2f} = okay edge (+5)")
-    elif token_price <= MAX_ENTRY_PRICE:
-        score += 0
-        reasons.append(f"Price ${token_price:.2f} = thin edge (+0)")
+    if token_price <= 0.42:
+        score += 12
+        reasons.append(f"Price ${token_price:.2f} = great edge (+12)")
+    elif token_price <= 0.50:
+        score += 8
+        reasons.append(f"Price ${token_price:.2f} = good edge (+8)")
+    elif token_price <= 0.57:
+        score += 3
+        reasons.append(f"Price ${token_price:.2f} = fair edge (+3)")
+    elif token_price <= ABSOLUTE_MAX_PRICE:
+        score -= 5
+        reasons.append(f"Price ${token_price:.2f} = thin edge (-5)")
     else:
         score -= 30
         reasons.append(f"Price ${token_price:.2f} = NO edge (-30)")
@@ -134,7 +147,7 @@ def calculate_confidence(
 def _size_multiplier_for_score(score: int) -> float:
     if score >= 90:
         return 2.0
-    if score >= 75:
+    if score >= 78:
         return 1.5
     if score >= 65:
         return 1.0
@@ -156,10 +169,11 @@ def decide(ctx: TradeContext) -> TradeDecision:
             reason_log={"skip_reason": "too_late", **_ctx_dict(ctx)},
         )
 
-    if abs(ctx.delta_pct) < MIN_DELTA_HARD:
+    abs_delta = abs(ctx.delta_pct)
+    if abs_delta < MIN_DELTA_HARD:
         return TradeDecision(
             action="SKIP",
-            reasons=[f"Delta {abs(ctx.delta_pct):.3f}% below floor {MIN_DELTA_HARD:.3f}%"],
+            reasons=[f"Delta {abs_delta:.3f}% below floor {MIN_DELTA_HARD:.3f}%"],
             reason_log={"skip_reason": "delta_below_floor", **_ctx_dict(ctx)},
         )
 
@@ -185,11 +199,17 @@ def decide(ctx: TradeContext) -> TradeDecision:
             reason_log={"skip_reason": "token_unavailable", **_ctx_dict(ctx)},
         )
 
-    if token_price >= MAX_ENTRY_PRICE:
+    # ── Dynamic price cap ──
+    max_price = _dynamic_max_price(abs_delta, ctx.seconds_remaining,
+                                   ctx.delta_trend)
+    if token_price > max_price:
         return TradeDecision(
             action="SKIP",
-            reasons=[f"${token_price:.2f} >= ${MAX_ENTRY_PRICE} — edge too thin"],
-            reason_log={"skip_reason": "price_too_high", **_ctx_dict(ctx)},
+            reasons=[f"${token_price:.2f} > dynamic cap ${max_price:.2f} "
+                     f"(delta={abs_delta:.3f}%, {ctx.seconds_remaining}s, "
+                     f"trend={ctx.delta_trend})"],
+            reason_log={"skip_reason": "price_above_dynamic_cap",
+                        "dynamic_cap": max_price, **_ctx_dict(ctx)},
         )
 
     # ── Scoring ──
@@ -221,7 +241,8 @@ def decide(ctx: TradeContext) -> TradeDecision:
         reasons=reasons,
         size_multiplier=mult,
         reason_log={"score": score, "factors": reasons,
-                    "target_side": target_side, **_ctx_dict(ctx)},
+                    "target_side": target_side,
+                    "dynamic_cap": max_price, **_ctx_dict(ctx)},
     )
 
 
