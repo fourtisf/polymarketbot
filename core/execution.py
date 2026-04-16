@@ -108,27 +108,13 @@ class Executor:
         "0xC5d563A36AE78145C45a50134d48A1215220f80a",  # NegRisk CTF Exchange
         "0xd91E80cF2E7be2e162c6513ceD06f1dD0dA35296",  # NegRisk Adapter
     ]
-    MAX_UINT256 = 2**256 - 1
-
-    ERC20_ABI = [
-        {"inputs": [{"name": "spender", "type": "address"}, {"name": "amount", "type": "uint256"}],
-         "name": "approve", "outputs": [{"name": "", "type": "bool"}], "type": "function"},
-        {"inputs": [{"name": "owner", "type": "address"}, {"name": "spender", "type": "address"}],
-         "name": "allowance", "outputs": [{"name": "", "type": "uint256"}], "type": "function"},
-    ]
-
-    CTF_ABI = [
-        {"inputs": [{"name": "operator", "type": "address"}, {"name": "approved", "type": "bool"}],
-         "name": "setApprovalForAll", "outputs": [], "type": "function"},
-        {"inputs": [{"name": "owner", "type": "address"}, {"name": "operator", "type": "address"}],
-         "name": "isApprovedForAll", "outputs": [{"name": "", "type": "bool"}], "type": "function"},
-    ]
+    MAX_UINT256_HEX = "f" * 64  # 2^256 - 1 as hex
+    POLYGON_RPC = "https://polygon-bor-rpc.publicnode.com"
 
     async def ensure_approvals(self) -> bool:
         """
         Ensure USDC.e and CTF allowances are set for Polymarket exchange
-        contracts. First tries py-clob-client SDK, then falls back to
-        direct on-chain web3 approval transactions.
+        contracts. Uses raw RPC calls + eth_account (no web3 dependency).
         """
         if self.dry_run:
             log.info("dry-run: skipping Polymarket approvals")
@@ -138,101 +124,160 @@ class Executor:
             log.error("approvals: CLOB client unavailable")
             return False
 
-        # 1. Try py-clob-client SDK method first
+        # Log current CLOB state for diagnostics
         try:
             from py_clob_client.clob_types import BalanceAllowanceParams, AssetType
 
-            def _sdk_approve():
+            def _check():
                 col_params = BalanceAllowanceParams(asset_type=AssetType.COLLATERAL)
-                bal = client.get_balance_allowance(col_params)
-                log.info("approvals: CLOB balance/allowance = %s", bal)
-                client.update_balance_allowance(col_params)
-                cond_params = BalanceAllowanceParams(
-                    asset_type=AssetType.CONDITIONAL, token_id="0",
-                )
-                client.update_balance_allowance(cond_params)
+                return client.get_balance_allowance(col_params)
 
-            await asyncio.to_thread(_sdk_approve)
-            log.info("approvals: SDK update_balance_allowance called")
+            bal = await asyncio.to_thread(_check)
+            log.info("approvals: CLOB balance/allowance = %s", bal)
         except Exception as exc:
-            log.warning("approvals: SDK method failed: %s — trying direct web3", exc)
+            log.warning("approvals: CLOB check failed: %s", exc)
 
-        # 2. Verify on-chain + direct web3 fallback
+        # Direct on-chain approvals via raw RPC + eth_account
         try:
-            results = await asyncio.to_thread(self._direct_web3_approvals)
-            log.info("approvals verified: %s", results)
+            results = await self._raw_rpc_approvals()
+            log.info("approvals complete: %s", results)
+            failed = [k for k, v in results.items() if v == "FAILED"]
+            if failed:
+                log.error("some approvals failed: %s", failed)
+                return False
             return True
         except Exception as exc:
-            log.exception("approvals: direct web3 failed: %s", exc)
+            log.exception("approvals failed: %s", exc)
             return False
 
-    def _direct_web3_approvals(self) -> dict:
-        """Send ERC-20 approve() and CTF setApprovalForAll() on-chain."""
-        from web3 import Web3
+    async def _raw_rpc_approvals(self) -> dict:
+        """Send ERC-20 approve() and CTF setApprovalForAll() via raw RPC."""
+        import aiohttp
+        from eth_account import Account
 
-        w3 = Web3(Web3.HTTPProvider("https://polygon-bor-rpc.publicnode.com"))
-        if not w3.is_connected():
-            raise RuntimeError("cannot connect to Polygon RPC")
-
-        acct = w3.eth.account.from_key(config.POLYGON_PRIVATE_KEY)
-        usdc = w3.eth.contract(
-            address=Web3.to_checksum_address(self.USDC_E), abi=self.ERC20_ABI
-        )
-        ctf = w3.eth.contract(
-            address=Web3.to_checksum_address(self.CTF_CONTRACT), abi=self.CTF_ABI
-        )
-        nonce = w3.eth.get_transaction_count(acct.address)
+        acct = Account.from_key(config.POLYGON_PRIVATE_KEY)
+        owner = acct.address.lower()
+        owner_padded = owner.replace("0x", "").rjust(64, "0")
         results = {}
 
-        # Approve USDC.e for each exchange spender
-        for spender in self.EXCHANGE_SPENDERS:
-            spender_cs = Web3.to_checksum_address(spender)
-            current = usdc.functions.allowance(acct.address, spender_cs).call()
-            label = spender[:10]
-            if current > 10**12:  # already approved (> $1M)
-                log.info("USDC.e allowance for %s already OK: %d", label, current)
-                results[f"usdc_{label}"] = "ok"
-                continue
-            log.info("USDC.e allowance for %s is %d — approving max...", label, current)
-            tx = usdc.functions.approve(spender_cs, self.MAX_UINT256).build_transaction({
-                "from": acct.address,
-                "nonce": nonce,
-                "gas": 100_000,
-                "gasPrice": w3.eth.gas_price,
-                "chainId": 137,
-            })
-            signed = acct.sign_transaction(tx)
-            tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
-            receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=60)
-            log.info("USDC.e approved %s: tx=%s status=%d", label, tx_hash.hex(), receipt["status"])
-            results[f"usdc_{label}"] = "approved" if receipt["status"] == 1 else "FAILED"
-            nonce += 1
+        async with aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=30)
+        ) as session:
+            # Get nonce and gas price
+            nonce = int(await self._rpc(session, "eth_getTransactionCount", [acct.address, "latest"]), 16)
+            gas_price_hex = await self._rpc(session, "eth_gasPrice", [])
+            gas_price = int(gas_price_hex, 16)
+            log.info("approvals: nonce=%d gas_price=%d", nonce, gas_price)
 
-        # Approve CTF (conditional tokens) for each exchange operator
-        for spender in self.EXCHANGE_SPENDERS:
-            spender_cs = Web3.to_checksum_address(spender)
-            label = spender[:10]
-            is_approved = ctf.functions.isApprovedForAll(acct.address, spender_cs).call()
-            if is_approved:
-                log.info("CTF approval for %s already OK", label)
-                results[f"ctf_{label}"] = "ok"
-                continue
-            log.info("CTF not approved for %s — setting approval...", label)
-            tx = ctf.functions.setApprovalForAll(spender_cs, True).build_transaction({
-                "from": acct.address,
-                "nonce": nonce,
-                "gas": 100_000,
-                "gasPrice": w3.eth.gas_price,
-                "chainId": 137,
-            })
-            signed = acct.sign_transaction(tx)
-            tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
-            receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=60)
-            log.info("CTF approved %s: tx=%s status=%d", label, tx_hash.hex(), receipt["status"])
-            results[f"ctf_{label}"] = "approved" if receipt["status"] == 1 else "FAILED"
-            nonce += 1
+            # 1. USDC.e approve for each exchange spender
+            for spender in self.EXCHANGE_SPENDERS:
+                label = spender[:10]
+                spender_padded = spender.lower().replace("0x", "").rjust(64, "0")
+
+                # Check current allowance: allowance(owner, spender) = 0xdd62ed3e
+                call_data = "0xdd62ed3e" + owner_padded + spender_padded
+                allowance_hex = await self._rpc(session, "eth_call", [
+                    {"to": self.USDC_E, "data": call_data}, "latest"
+                ])
+                allowance = int(allowance_hex, 16) if allowance_hex and allowance_hex != "0x" else 0
+
+                if allowance > 10**12:
+                    log.info("USDC.e allowance for %s OK: %d", label, allowance)
+                    results[f"usdc_{label}"] = "ok"
+                    continue
+
+                log.info("USDC.e allowance for %s is %d — approving...", label, allowance)
+                # approve(spender, max_uint256) = 0x095ea7b3
+                tx_data = "0x095ea7b3" + spender_padded + self.MAX_UINT256_HEX
+                tx_hash = await self._sign_and_send(
+                    session, acct, self.USDC_E, tx_data, nonce, gas_price
+                )
+                if tx_hash:
+                    receipt_ok = await self._wait_receipt(session, tx_hash)
+                    log.info("USDC.e approved %s: tx=%s ok=%s", label, tx_hash, receipt_ok)
+                    results[f"usdc_{label}"] = "approved" if receipt_ok else "FAILED"
+                    nonce += 1
+                else:
+                    results[f"usdc_{label}"] = "FAILED"
+
+            # 2. CTF setApprovalForAll for each exchange operator
+            for spender in self.EXCHANGE_SPENDERS:
+                label = spender[:10]
+                spender_padded = spender.lower().replace("0x", "").rjust(64, "0")
+
+                # Check: isApprovedForAll(owner, operator) = 0xe985e9c5
+                call_data = "0xe985e9c5" + owner_padded + spender_padded
+                approved_hex = await self._rpc(session, "eth_call", [
+                    {"to": self.CTF_CONTRACT, "data": call_data}, "latest"
+                ])
+                is_approved = int(approved_hex, 16) if approved_hex and approved_hex != "0x" else 0
+
+                if is_approved:
+                    log.info("CTF approval for %s OK", label)
+                    results[f"ctf_{label}"] = "ok"
+                    continue
+
+                log.info("CTF not approved for %s — approving...", label)
+                # setApprovalForAll(operator, true) = 0xa22cb465
+                true_padded = "0" * 63 + "1"
+                tx_data = "0xa22cb465" + spender_padded + true_padded
+                tx_hash = await self._sign_and_send(
+                    session, acct, self.CTF_CONTRACT, tx_data, nonce, gas_price
+                )
+                if tx_hash:
+                    receipt_ok = await self._wait_receipt(session, tx_hash)
+                    log.info("CTF approved %s: tx=%s ok=%s", label, tx_hash, receipt_ok)
+                    results[f"ctf_{label}"] = "approved" if receipt_ok else "FAILED"
+                    nonce += 1
+                else:
+                    results[f"ctf_{label}"] = "FAILED"
 
         return results
+
+    async def _rpc(self, session, method: str, params: list):
+        """Make a JSON-RPC call to Polygon."""
+        payload = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
+        async with session.post(self.POLYGON_RPC, json=payload) as resp:
+            data = await resp.json()
+        if "error" in data:
+            raise RuntimeError(f"RPC {method}: {data['error']}")
+        return data.get("result")
+
+    async def _sign_and_send(self, session, acct, to: str, data: str,
+                              nonce: int, gas_price: int) -> Optional[str]:
+        """Sign and broadcast a transaction, return tx hash or None."""
+        tx = {
+            "to": bytes.fromhex(to.replace("0x", "")),
+            "value": 0,
+            "gas": 100_000,
+            "gasPrice": gas_price,
+            "nonce": nonce,
+            "chainId": 137,
+            "data": bytes.fromhex(data.replace("0x", "")),
+        }
+        try:
+            signed = acct.sign_transaction(tx)
+            raw = "0x" + signed.raw_transaction.hex()
+            tx_hash = await self._rpc(session, "eth_sendRawTransaction", [raw])
+            return tx_hash
+        except Exception as exc:
+            log.error("sign_and_send failed: %s", exc)
+            return None
+
+    async def _wait_receipt(self, session, tx_hash: str, timeout: int = 60) -> bool:
+        """Poll for transaction receipt."""
+        import time as _time
+        deadline = _time.time() + timeout
+        while _time.time() < deadline:
+            try:
+                receipt = await self._rpc(session, "eth_getTransactionReceipt", [tx_hash])
+                if receipt is not None:
+                    return int(receipt.get("status", "0x0"), 16) == 1
+            except Exception:
+                pass
+            await asyncio.sleep(2)
+        log.warning("tx %s receipt timeout after %ds", tx_hash, timeout)
+        return False
 
     # ── Public API ───────────────────────────────────────────
     async def place_limit_buy(
