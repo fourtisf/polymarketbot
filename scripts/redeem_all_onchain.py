@@ -330,7 +330,7 @@ async def main():
     print(f"{'='*60}")
     print(f"EOA: {eoa}\n")
 
-    timeout = aiohttp.ClientTimeout(total=30)
+    timeout = aiohttp.ClientTimeout(total=300)
     async with aiohttp.ClientSession(timeout=timeout) as session:
         bal_before = await get_usdc_balance(session, eoa)
         print(f"USDC.e before: ${bal_before:.2f}\n")
@@ -361,18 +361,24 @@ async def main():
         print("CHECKING BALANCES...")
         tokens_with_balance = []
         checked = 0
+        errors = 0
         for tid_str in sorted(all_tokens):
             try:
                 tid_int = int(tid_str)
             except ValueError:
                 continue
             checked += 1
-            bal = await get_ctf_balance(session, eoa, tid_int)
-            if bal > 0:
-                tokens_with_balance.append((tid_str, bal))
-                print(f"  HAS BALANCE: {tid_str[:20]}... = {bal} raw (${bal/1e6:.4f})")
-            if checked % 20 == 0:
-                print(f"  ... checked {checked}/{len(all_tokens)}")
+            try:
+                bal = await get_ctf_balance(session, eoa, tid_int)
+                if bal > 0:
+                    tokens_with_balance.append((tid_str, bal))
+                    print(f"  HAS BALANCE: {tid_str[:20]}... = {bal} raw (${bal/1e6:.4f})")
+            except Exception:
+                errors += 1
+                await asyncio.sleep(1)  # Back off on errors
+            if checked % 50 == 0:
+                print(f"  ... checked {checked}/{len(all_tokens)} ({errors} errors)")
+                await asyncio.sleep(0.2)  # Rate limit
 
         total_value = sum(b / 1e6 for _, b in tokens_with_balance)
         print(f"\n  Tokens with balance: {len(tokens_with_balance)}")
