@@ -558,8 +558,10 @@ class Executor:
                     ctf_offset + ctf_len + ctf_idx0 + ctf_idx1)
 
         # Order: try NegRisk first (most Polymarket markets), then CTF
+        # NegRiskCtfExchange holds positions from CLOB trades — try it too
         attempts = [
             (self.NEG_RISK_ADAPTER, neg_risk_data, "NegRiskAdapter"),
+            (self.NEG_RISK_EXCHANGE, neg_risk_data, "NegRiskExchange"),
             (self.CTF_CONTRACT, ctf_data, "CTF"),
         ]
         if not neg_risk:

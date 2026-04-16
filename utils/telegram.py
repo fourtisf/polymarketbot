@@ -1215,15 +1215,18 @@ class CommandBot:
                 continue
             seen_slugs.add(slug)
 
-            # Look up conditionId + neg_risk via Gamma API
-            info = await self._gamma_market_info(slug)
-            if not info or not info.get("condition_id"):
-                no_gamma += 1
-                if len(diag_lines) < 3:
-                    diag_lines.append(f"⚪ {slug}: no conditionId from Gamma")
-                continue
-            cond_id = info["condition_id"]
-            neg_risk = info.get("neg_risk", True)
+            # Try stored conditionId first, then Gamma API as fallback
+            cond_id = win.get("condition_id", "")
+            neg_risk = win.get("neg_risk", True)
+            if not cond_id:
+                info = await self._gamma_market_info(slug)
+                if not info or not info.get("condition_id"):
+                    no_gamma += 1
+                    if len(diag_lines) < 3:
+                        diag_lines.append(f"⚪ {slug}: no conditionId")
+                    continue
+                cond_id = info["condition_id"]
+                neg_risk = info.get("neg_risk", True)
             if cond_id in seen_conditions:
                 continue
             seen_conditions.add(cond_id)

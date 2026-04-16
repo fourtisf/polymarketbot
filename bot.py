@@ -395,6 +395,7 @@ class TradingBot:
             "ts": int(time.time()),
             "action": decision.action,
             "side": "UP" if decision.action == "BUY_UP" else "DOWN",
+            "token_id": decision.token_id,
             "entry_price": fill.avg_price,
             "limit_price": best_ask,
             "shares": fill.filled_shares,
@@ -403,6 +404,8 @@ class TradingBot:
             "reason_log": decision.reason_log,
             "order_id": fill.order_id,
             "tx_hash": fill.tx_hash,
+            "condition_id": w.condition_id,
+            "neg_risk": w.neg_risk,
         }
         self.state.entry_record = record
         self.trade_log.log_trade({**record, "phase": "entry"})
