@@ -45,6 +45,7 @@ from utils.pnl_tracker import PnLTracker
 from utils.telegram import (
     CommandBot,
     Notifier,
+    fetch_balances,
     market_link_html,
     tx_link_html,
     wallet_link_html,
@@ -335,15 +336,19 @@ class TradingBot:
         log.info("ENTRY %s size=$%.2f price=%.3f conf=%d",
                  decision.action, size_usd, decision.token_price, decision.confidence)
 
-        # Check on-chain balance before placing order
-        if not self.dry_run:
-            balance = await self.executor.get_balance_usdc()
-            if balance is not None and balance < size_usd:
-                log.warning("insufficient balance: $%.2f < order $%.2f", balance, size_usd)
-                self.state.entered_this_window = True  # don't retry
+        # Check on-chain USDC balance before placing order
+        if not self.dry_run and config.POLYGON_PUBLIC_KEY:
+            try:
+                usdc_balance, _ = await fetch_balances(config.POLYGON_PUBLIC_KEY)
+            except Exception as exc:
+                log.warning("balance check failed: %s — proceeding anyway", exc)
+                usdc_balance = None
+            if usdc_balance is not None and usdc_balance < size_usd:
+                log.warning("insufficient balance: $%.2f < order $%.2f", usdc_balance, size_usd)
+                self.state.entered_this_window = True
                 await self.notifier.send_text(
                     f"⚠️ Order skipped on {w.slug}\n"
-                    f"Reason: insufficient balance (${balance:.2f} < ${size_usd:.2f})\n"
+                    f"Reason: insufficient USDC (${usdc_balance:.2f} < ${size_usd:.2f})\n"
                     f"⛔ <b>BOT AUTO-PAUSED</b> — deposit funds and /resume"
                 )
                 config.RUNTIME.paused = True
