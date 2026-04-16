@@ -105,6 +105,8 @@ class Executor:
     CTF_CONTRACT = "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045"
     NEG_RISK_ADAPTER = "0xd91E80cF2E7be2e162c6513ceD06f1dD0dA35296"
     NEG_RISK_EXCHANGE = "0xC5d563A36AE78145C45a50134d48A1215220f80a"
+    CTF_EXCHANGE = "0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E"
+    PROXY_WALLET_FACTORY = "0xaB45c5A4B0c941a2F231C04C3f49182e1A254052"
     EXCHANGE_SPENDERS = [
         "0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E",  # CTF Exchange
         "0xC5d563A36AE78145C45a50134d48A1215220f80a",  # NegRisk CTF Exchange
@@ -112,6 +114,7 @@ class Executor:
     ]
     MAX_UINT256_HEX = "f" * 64  # 2^256 - 1 as hex
     POLYGON_RPC = "https://polygon-bor-rpc.publicnode.com"
+    _proxy_wallet_address: Optional[str] = None  # cached
 
     async def ensure_approvals(self) -> bool:
         """
@@ -500,110 +503,175 @@ class Executor:
         except Exception as exc:
             log.warning("cancel_all failed: %s", exc)
 
+    async def get_proxy_wallet_address(self, session=None) -> Optional[str]:
+        """
+        Look up the Polymarket proxy wallet address for our EOA.
+        Calls getPolyProxyWalletAddress(address) on the Exchange contract.
+        """
+        if self._proxy_wallet_address:
+            return self._proxy_wallet_address
+
+        from eth_account import Account
+        acct = Account.from_key(config.POLYGON_PRIVATE_KEY)
+
+        # getPolyProxyWalletAddress(address) selector = 0xedef7d8e
+        addr_padded = acct.address.lower().replace("0x", "").rjust(64, "0")
+        call_data = "0xedef7d8e" + addr_padded
+
+        close_session = False
+        if session is None:
+            import aiohttp
+            session = aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=10))
+            close_session = True
+
+        try:
+            result = await self._rpc(session, "eth_call", [
+                {"to": self.CTF_EXCHANGE, "data": call_data}, "latest"
+            ])
+            if result and result != "0x" and len(result) >= 42:
+                proxy_addr = "0x" + result[-40:]
+                self._proxy_wallet_address = proxy_addr
+                log.info("proxy wallet for %s: %s", acct.address, proxy_addr)
+                return proxy_addr
+        except Exception as exc:
+            log.warning("failed to get proxy wallet address: %s", exc)
+        finally:
+            if close_session:
+                await session.close()
+        return None
+
     async def redeem_positions(self, condition_id: str,
                               neg_risk: bool = True) -> Optional[str]:
         """
         Redeem resolved conditional tokens back to USDC.e.
 
-        Polymarket has TWO redemption paths:
-        1. Standard CTF: tokens are in user's wallet → CTF.redeemPositions()
-        2. NegRisk: tokens are in NegRiskAdapter → NegRiskAdapter.redeemPositions()
+        Polymarket holds conditional tokens in a PROXY WALLET (not the EOA).
+        We must call through the ProxyWalletFactory.proxy() function to
+        forward the redeemPositions call from the proxy wallet.
 
-        BTC 5-minute markets are typically NegRisk. We try NegRisk first,
-        then fall back to CTF.
+        Flow: EOA -> Factory.proxy([ProxyCall]) -> ProxyWallet -> CTF.redeemPositions()
         """
         if self.dry_run or not condition_id:
             return None
 
         import aiohttp
+        import eth_abi
         from eth_account import Account
 
         acct = Account.from_key(config.POLYGON_PRIVATE_KEY)
         cond_padded = condition_id.lower().replace("0x", "").rjust(64, "0")
+        cond_bytes = bytes.fromhex(cond_padded)
 
-        # Build calldata for BOTH approaches
-        # ── 1. NegRisk Adapter: redeemPositions(bytes32 conditionId, uint256[] indexSets)
-        neg_risk_selector = "dbeccb23"  # keccak256("redeemPositions(bytes32,uint256[])")[:8]
-        try:
-            from eth_hash.auto import keccak as _keccak
-            neg_risk_selector = _keccak(
-                b"redeemPositions(bytes32,uint256[])"
-            ).hex()[:8]
-        except ImportError:
-            pass
-        # ABI: conditionId(32) + offset_to_array(32) + array_len(32) + [1, 2]
-        nr_offset = "0" * 62 + "40"   # 0x40 = 64 (2 params × 32 bytes)
-        nr_len = "0" * 63 + "2"
-        nr_idx0 = "0" * 63 + "1"
-        nr_idx1 = "0" * 63 + "2"
-        neg_risk_data = ("0x" + neg_risk_selector + cond_padded +
-                         nr_offset + nr_len + nr_idx0 + nr_idx1)
+        # Build inner redeemPositions calldata for BOTH approaches
+        # ── 1. NegRisk: redeemPositions(bytes32 conditionId, uint256[] indexSets)
+        nr_selector = bytes.fromhex("dbeccb23")
+        nr_params = eth_abi.encode(
+            ["bytes32", "uint256[]"],
+            [cond_bytes, [1, 2]]
+        )
+        neg_risk_calldata = nr_selector + nr_params
 
         # ── 2. Standard CTF: redeemPositions(address, bytes32, bytes32, uint256[])
-        ctf_selector = "01b7037c"  # keccak256("redeemPositions(address,bytes32,bytes32,uint256[])")[:8]
-        try:
-            from eth_hash.auto import keccak as _keccak
-            ctf_selector = _keccak(
-                b"redeemPositions(address,bytes32,bytes32,uint256[])"
-            ).hex()[:8]
-        except ImportError:
-            pass
-        usdc_e_padded = self.USDC_E.lower().replace("0x", "").rjust(64, "0")
-        parent = "0" * 64
-        ctf_offset = "0" * 62 + "80"   # 0x80 = 128 (4 params × 32 bytes)
-        ctf_len = "0" * 63 + "2"
-        ctf_idx0 = "0" * 63 + "1"
-        ctf_idx1 = "0" * 63 + "2"
-        ctf_data = ("0x" + ctf_selector + usdc_e_padded + parent + cond_padded +
-                    ctf_offset + ctf_len + ctf_idx0 + ctf_idx1)
+        ctf_selector = bytes.fromhex("01b7037c")
+        ctf_params = eth_abi.encode(
+            ["address", "bytes32", "bytes32", "uint256[]"],
+            [self.USDC_E, b'\x00' * 32, cond_bytes, [1, 2]]
+        )
+        ctf_calldata = ctf_selector + ctf_params
 
-        # Order: try NegRisk first (most Polymarket markets), then CTF
-        # NegRiskCtfExchange holds positions from CLOB trades — try it too
+        # Contracts to try redemption against
         attempts = [
-            (self.NEG_RISK_ADAPTER, neg_risk_data, "NegRiskAdapter"),
-            (self.NEG_RISK_EXCHANGE, neg_risk_data, "NegRiskExchange"),
-            (self.CTF_CONTRACT, ctf_data, "CTF"),
+            (self.NEG_RISK_ADAPTER, neg_risk_calldata, "NegRiskAdapter"),
+            (self.NEG_RISK_EXCHANGE, neg_risk_calldata, "NegRiskExchange"),
+            (self.CTF_CONTRACT, ctf_calldata, "CTF"),
         ]
         if not neg_risk:
-            attempts.reverse()  # Try CTF first if explicitly non-NegRisk
+            attempts.reverse()
 
         log.info("redeem: condition=%s neg_risk=%s", condition_id[:16], neg_risk)
+
+        # Factory.proxy() selector = 0x34ee9791
+        # Encodes: proxy((uint8 typeCode, address to, uint256 value, bytes data)[])
+        factory_selector = bytes.fromhex("34ee9791")
 
         async with aiohttp.ClientSession(
             timeout=aiohttp.ClientTimeout(total=60)
         ) as session:
-            for target_contract, tx_data, label in attempts:
-                log.info("redeem: trying %s (contract=%s, data_len=%d)",
-                         label, target_contract[:10], len(tx_data))
+            # Get proxy wallet address for diagnostics
+            proxy_addr = await self.get_proxy_wallet_address(session)
+            log.info("redeem: proxy_wallet=%s eoa=%s", proxy_addr, acct.address)
+
+            for target_contract, inner_calldata, label in attempts:
+                # ── Strategy A: Call through ProxyWalletFactory ──
+                # This makes the proxy wallet (which holds tokens) call redeemPositions
+                if proxy_addr:
+                    factory_params = eth_abi.encode(
+                        ["(uint8,address,uint256,bytes)[]"],
+                        [[(0, target_contract, 0, inner_calldata)]]
+                    )
+                    factory_tx_data = "0x" + (factory_selector + factory_params).hex()
+
+                    log.info("redeem: trying %s via ProxyFactory (target=%s)",
+                             label, target_contract[:10])
+                    try:
+                        est_hex = await self._rpc(session, "eth_estimateGas", [{
+                            "from": acct.address,
+                            "to": self.PROXY_WALLET_FACTORY,
+                            "data": factory_tx_data,
+                        }])
+                        estimated = int(est_hex, 16)
+                        if estimated < 30_000:
+                            log.info("redeem: %s via factory gas=%d (no-op) — skipping",
+                                     label, estimated)
+                        else:
+                            gas_limit = int(estimated * 1.5)
+                            log.info("redeem: %s via factory gas=%d, using %d",
+                                     label, estimated, gas_limit)
+                            nonce = int(await self._rpc(
+                                session, "eth_getTransactionCount",
+                                [acct.address, "latest"]
+                            ), 16)
+                            gas_price = int(await self._rpc(
+                                session, "eth_gasPrice", []
+                            ), 16)
+                            tx_hash = await self._sign_and_send(
+                                session, acct, self.PROXY_WALLET_FACTORY,
+                                factory_tx_data, nonce, gas_price,
+                                gas=gas_limit,
+                            )
+                            if tx_hash:
+                                ok = await self._wait_receipt(session, tx_hash)
+                                log.info("redeem %s via factory tx=%s ok=%s",
+                                         label, tx_hash, ok)
+                                if ok:
+                                    return tx_hash
+                                log.error("redeem %s via factory reverted: %s",
+                                          label, tx_hash)
+                    except Exception as exc:
+                        log.info("redeem: %s via factory failed: %s", label, exc)
+
+                # ── Strategy B: Direct call from EOA (fallback) ──
+                direct_tx_data = "0x" + inner_calldata.hex()
+                log.info("redeem: trying %s direct from EOA", label)
                 try:
                     est_hex = await self._rpc(session, "eth_estimateGas", [{
                         "from": acct.address,
                         "to": target_contract,
-                        "data": tx_data,
+                        "data": direct_tx_data,
                     }])
                     estimated = int(est_hex, 16)
-                    # Skip if gas is very low (< 30k) — likely a no-op
                     if estimated < 30_000:
-                        log.info("redeem: %s gas=%d (too low, likely no-op) — skipping",
+                        log.info("redeem: %s direct gas=%d (no-op) — skipping",
                                  label, estimated)
                         continue
                     gas_limit = int(estimated * 1.5)
-                    log.info("redeem: %s gas estimate=%d, using %d",
+                    log.info("redeem: %s direct gas=%d, using %d",
                              label, estimated, gas_limit)
                 except Exception as est_exc:
-                    err_msg = str(est_exc)
-                    # Extract revert reason from RPC error if available
-                    if "message" in err_msg:
-                        try:
-                            import json as _json
-                            err_data = _json.loads(err_msg.split("RPC ", 1)[-1])
-                            err_msg = err_data.get("message", err_msg)
-                        except Exception:
-                            pass
-                    log.info("redeem: %s gas estimate failed: %s", label, err_msg)
-                    continue  # Try next approach
+                    log.info("redeem: %s direct gas est failed: %s", label, est_exc)
+                    continue
 
-                # Gas estimation passed with meaningful gas — proceed with TX
                 try:
                     nonce = int(await self._rpc(
                         session, "eth_getTransactionCount",
@@ -612,24 +680,101 @@ class Executor:
                     gas_price = int(await self._rpc(
                         session, "eth_gasPrice", []
                     ), 16)
-
                     tx_hash = await self._sign_and_send(
-                        session, acct, target_contract, tx_data,
+                        session, acct, target_contract, direct_tx_data,
                         nonce, gas_price, gas=gas_limit,
                     )
                     if tx_hash:
                         ok = await self._wait_receipt(session, tx_hash)
-                        log.info("redeem %s tx=%s ok=%s", label, tx_hash, ok)
+                        log.info("redeem %s direct tx=%s ok=%s", label, tx_hash, ok)
                         if ok:
                             return tx_hash
-                        log.error("redeem %s TX reverted: %s", label, tx_hash)
-                    else:
-                        log.error("redeem %s: sign_and_send returned None", label)
+                        log.error("redeem %s direct reverted: %s", label, tx_hash)
                 except Exception as exc:
-                    log.exception("redeem %s failed: %s", label, exc)
+                    log.exception("redeem %s direct failed: %s", label, exc)
 
         log.warning("redeem: all approaches failed for condition %s", condition_id[:16])
         return None
+
+    async def withdraw_proxy_usdc(self) -> Optional[str]:
+        """
+        Transfer USDC.e from proxy wallet back to EOA.
+        Calls Factory.proxy() to execute USDC.transfer(eoa, balance) from proxy.
+        """
+        import aiohttp
+        import eth_abi
+        from eth_account import Account
+
+        acct = Account.from_key(config.POLYGON_PRIVATE_KEY)
+
+        async with aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=30)
+        ) as session:
+            proxy_addr = await self.get_proxy_wallet_address(session)
+            if not proxy_addr:
+                log.warning("withdraw_proxy: no proxy wallet found")
+                return None
+
+            # Check USDC.e balance at proxy wallet
+            addr_padded = proxy_addr.lower().replace("0x", "").rjust(64, "0")
+            bal_data = "0x70a08231" + "0" * 24 + addr_padded[-40:]
+            bal_hex = await self._rpc(session, "eth_call", [
+                {"to": self.USDC_E, "data": bal_data}, "latest"
+            ])
+            balance = int(bal_hex, 16) if bal_hex and bal_hex != "0x" else 0
+            if balance == 0:
+                log.info("withdraw_proxy: proxy wallet has 0 USDC.e")
+                return None
+
+            log.info("withdraw_proxy: proxy has %d USDC.e raw (%.2f)",
+                     balance, balance / 1e6)
+
+            # Build transfer(address,uint256) calldata
+            # transfer selector = 0xa9059cbb
+            transfer_selector = bytes.fromhex("a9059cbb")
+            transfer_params = eth_abi.encode(
+                ["address", "uint256"],
+                [acct.address, balance]
+            )
+            transfer_calldata = transfer_selector + transfer_params
+
+            # Wrap in Factory.proxy() call
+            factory_selector = bytes.fromhex("34ee9791")
+            factory_params = eth_abi.encode(
+                ["(uint8,address,uint256,bytes)[]"],
+                [[(0, self.USDC_E, 0, transfer_calldata)]]
+            )
+            factory_tx_data = "0x" + (factory_selector + factory_params).hex()
+
+            try:
+                est_hex = await self._rpc(session, "eth_estimateGas", [{
+                    "from": acct.address,
+                    "to": self.PROXY_WALLET_FACTORY,
+                    "data": factory_tx_data,
+                }])
+                estimated = int(est_hex, 16)
+                gas_limit = int(estimated * 1.5)
+            except Exception as exc:
+                log.warning("withdraw_proxy: gas estimate failed: %s", exc)
+                return None
+
+            nonce = int(await self._rpc(
+                session, "eth_getTransactionCount",
+                [acct.address, "latest"]
+            ), 16)
+            gas_price = int(await self._rpc(session, "eth_gasPrice", []), 16)
+
+            tx_hash = await self._sign_and_send(
+                session, acct, self.PROXY_WALLET_FACTORY,
+                factory_tx_data, nonce, gas_price, gas=gas_limit,
+            )
+            if tx_hash:
+                ok = await self._wait_receipt(session, tx_hash)
+                log.info("withdraw_proxy tx=%s ok=%s amount=%.2f",
+                         tx_hash, ok, balance / 1e6)
+                if ok:
+                    return tx_hash
+            return None
 
     async def get_balance_usdc(self) -> Optional[float]:
         """Query on-chain USDC balance via CLOB client."""

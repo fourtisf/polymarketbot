@@ -36,9 +36,9 @@ GAMMA_HOST = "https://gamma-api.polymarket.com"
 POLYGON_RPC = "https://polygon-bor-rpc.publicnode.com"
 USDC_E = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
 CTF_CONTRACT = "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045"
-
-# redeemPositions(address,bytes32,bytes32,uint256[]) selector
-REDEEM_SELECTOR = "01a18627"
+NEG_RISK_ADAPTER = "0xd91E80cF2E7be2e162c6513ceD06f1dD0dA35296"
+CTF_EXCHANGE = "0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E"
+PROXY_WALLET_FACTORY = "0xaB45c5A4B0c941a2F231C04C3f49182e1A254052"
 
 
 async def rpc_call(session, method, params):
@@ -129,52 +129,111 @@ async def fetch_condition_id(session, token_id):
     }
 
 
-async def redeem_positions(session, acct, condition_id):
-    """Call redeemPositions on CTF contract."""
-    usdc_e_padded = USDC_E.lower().replace("0x", "").rjust(64, "0")
-    parent_collection = "0" * 64
-    cond_padded = condition_id.lower().replace("0x", "").rjust(64, "0")
-    array_offset = "0" * 62 + "80"
-    array_len = "0" * 63 + "2"
-    idx_0 = "0" * 63 + "1"
-    idx_1 = "0" * 63 + "2"
+async def get_proxy_wallet(session, address):
+    """Look up the proxy wallet address for an EOA."""
+    addr_padded = address.lower().replace("0x", "").rjust(64, "0")
+    # getPolyProxyWalletAddress(address) selector = 0xedef7d8e
+    call_data = "0xedef7d8e" + addr_padded
+    result = await rpc_call(session, "eth_call", [
+        {"to": CTF_EXCHANGE, "data": call_data}, "latest"
+    ])
+    if result and result != "0x" and len(result) >= 42:
+        return "0x" + result[-40:]
+    return None
 
-    tx_data = "0x" + REDEEM_SELECTOR + usdc_e_padded + parent_collection + \
-              cond_padded + array_offset + array_len + idx_0 + idx_1
 
-    # Estimate gas
+async def redeem_positions(session, acct, condition_id, neg_risk=True):
+    """
+    Redeem via ProxyWalletFactory.proxy() — tokens are in the proxy wallet.
+    Falls back to direct call from EOA.
+    """
+    import eth_abi
+
+    cond_bytes = bytes.fromhex(condition_id.lower().replace("0x", "").rjust(64, "0"))
+
+    # Build inner redeemPositions calldata
+    if neg_risk:
+        # NegRisk: redeemPositions(bytes32, uint256[])
+        inner_selector = bytes.fromhex("dbeccb23")
+        inner_params = eth_abi.encode(["bytes32", "uint256[]"], [cond_bytes, [1, 2]])
+        target = NEG_RISK_ADAPTER
+    else:
+        # CTF: redeemPositions(address, bytes32, bytes32, uint256[])
+        inner_selector = bytes.fromhex("01b7037c")
+        inner_params = eth_abi.encode(
+            ["address", "bytes32", "bytes32", "uint256[]"],
+            [USDC_E, b'\x00' * 32, cond_bytes, [1, 2]]
+        )
+        target = CTF_CONTRACT
+
+    inner_calldata = inner_selector + inner_params
+
+    # Wrap in Factory.proxy() call
+    factory_selector = bytes.fromhex("34ee9791")
+    factory_params = eth_abi.encode(
+        ["(uint8,address,uint256,bytes)[]"],
+        [[(0, target, 0, inner_calldata)]]
+    )
+    factory_tx_data = "0x" + (factory_selector + factory_params).hex()
+
+    # Try via proxy factory first
     gas_limit = 300_000
+    use_factory = False
     try:
         est_hex = await rpc_call(session, "eth_estimateGas", [{
             "from": acct.address,
-            "to": CTF_CONTRACT,
-            "data": tx_data,
+            "to": PROXY_WALLET_FACTORY,
+            "data": factory_tx_data,
         }])
         estimated = int(est_hex, 16)
-        gas_limit = int(estimated * 1.5)
-        print(f"  Gas estimate: {estimated}, using {gas_limit}")
+        if estimated >= 30_000:
+            gas_limit = int(estimated * 1.5)
+            use_factory = True
+            print(f"  Gas (via proxy factory): {estimated}, using {gas_limit}")
+        else:
+            print(f"  Proxy factory gas too low ({estimated}), trying direct...")
     except Exception as e:
-        print(f"  Gas estimate failed ({e}), using {gas_limit}")
-        # If gas estimation fails, the TX will likely revert — but let's try
-        # It could mean no tokens to redeem or condition not resolved yet
+        print(f"  Proxy factory gas est failed ({e}), trying direct...")
+
+    if not use_factory:
+        # Fallback: direct call from EOA
+        direct_data = "0x" + inner_calldata.hex()
+        try:
+            est_hex = await rpc_call(session, "eth_estimateGas", [{
+                "from": acct.address,
+                "to": target,
+                "data": direct_data,
+            }])
+            estimated = int(est_hex, 16)
+            if estimated < 30_000:
+                print(f"  Direct gas too low ({estimated}) — nothing to redeem")
+                return None
+            gas_limit = int(estimated * 1.5)
+            print(f"  Gas (direct): {estimated}, using {gas_limit}")
+        except Exception as e:
+            print(f"  Direct gas est failed ({e}) — skipping")
+            return None
+
+    tx_to = PROXY_WALLET_FACTORY if use_factory else target
+    tx_data_hex = factory_tx_data if use_factory else "0x" + inner_calldata.hex()
 
     nonce = int(await rpc_call(session, "eth_getTransactionCount",
                                 [acct.address, "latest"]), 16)
     gas_price = int(await rpc_call(session, "eth_gasPrice", []), 16)
 
     tx = {
-        "to": bytes.fromhex(CTF_CONTRACT.replace("0x", "")),
+        "to": bytes.fromhex(tx_to.replace("0x", "")),
         "value": 0,
         "gas": gas_limit,
         "gasPrice": gas_price,
         "nonce": nonce,
         "chainId": 137,
-        "data": bytes.fromhex(tx_data.replace("0x", "")),
+        "data": bytes.fromhex(tx_data_hex.replace("0x", "")),
     }
     signed = acct.sign_transaction(tx)
     raw = "0x" + signed.raw_transaction.hex()
     tx_hash = await rpc_call(session, "eth_sendRawTransaction", [raw])
-    print(f"  TX sent: {tx_hash}")
+    print(f"  TX sent ({'factory' if use_factory else 'direct'}): {tx_hash}")
 
     # Wait for receipt
     import time
@@ -186,15 +245,15 @@ async def redeem_positions(session, acct, condition_id):
                 status = int(receipt.get("status", "0x0"), 16)
                 gas_used = int(receipt.get("gasUsed", "0x0"), 16)
                 if status == 1:
-                    print(f"  ✅ TX confirmed! Gas used: {gas_used}")
+                    print(f"  TX confirmed! Gas used: {gas_used}")
                     return tx_hash
                 else:
-                    print(f"  ❌ TX reverted! Gas used: {gas_used}")
+                    print(f"  TX reverted! Gas used: {gas_used}")
                     return None
         except Exception:
             pass
         await asyncio.sleep(2)
-    print("  ⏰ TX receipt timeout")
+    print("  TX receipt timeout")
     return None
 
 
@@ -205,14 +264,23 @@ async def main():
 
     acct = Account.from_key(PRIVATE_KEY)
     address = acct.address
-    print(f"Wallet: {address}")
+    print(f"Wallet (EOA): {address}")
     print()
 
     timeout = aiohttp.ClientTimeout(total=30)
     async with aiohttp.ClientSession(timeout=timeout) as session:
+        # Show proxy wallet address
+        proxy_addr = await get_proxy_wallet(session, address)
+        if proxy_addr:
+            print(f"Proxy wallet: {proxy_addr}")
+            proxy_bal = await get_usdc_balance(session, proxy_addr)
+            print(f"Proxy USDC.e: ${proxy_bal:.2f}")
+        else:
+            print("Proxy wallet: not found")
+
         # Show current USDC.e balance
         bal_before = await get_usdc_balance(session, address)
-        print(f"USDC.e balance: ${bal_before:.2f}")
+        print(f"EOA USDC.e:   ${bal_before:.2f}")
         print()
 
         # ── Strategy 1: Check trade log files for token IDs ──

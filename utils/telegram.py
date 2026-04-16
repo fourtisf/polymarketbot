@@ -942,12 +942,28 @@ class CommandBot:
                 f"Balance fetch failed: {exc}", chat_id=chat_id
             )
             return
+        # Get proxy wallet info
+        proxy_addr = ""
+        proxy_usdc = 0.0
+        try:
+            if self.executor:
+                proxy_addr = await self.executor.get_proxy_wallet_address() or ""
+            if proxy_addr:
+                proxy_usdc, _, _ = await fetch_all_usdc(proxy_addr)
+        except Exception:
+            pass
+
         lines = [
             f"👛 <b>WALLET</b>",
             BAR,
             f"🔑 {wallet_link_html(addr, addr)}",
-            f"💵 USDC.e: <b>${usdc_e:,.2f}</b> (Polymarket)",
+            f"💵 USDC.e: <b>${usdc_e:,.2f}</b> (EOA)",
         ]
+        if proxy_addr:
+            lines.append(
+                f"📦 Proxy: <code>{proxy_addr[:8]}...{proxy_addr[-4:]}</code>"
+                f" — ${proxy_usdc:,.2f}"
+            )
         if usdc_nat > 0.01:
             lines.append(f"💰 USDC (native): <b>${usdc_nat:,.2f}</b>")
         lines.append(f"⛽ POL: <b>{pol:,.4f}</b>")
@@ -1269,6 +1285,17 @@ class CommandBot:
                     f"❌ {window_label_from_slug(slug)} — {str(exc)[:60]}"
                 )
 
+        # Withdraw any USDC.e from proxy wallet to EOA
+        if redeemed > 0:
+            try:
+                w_tx = await self.executor.withdraw_proxy_usdc()
+                if w_tx:
+                    results_lines.append(
+                        f"💵 Proxy USDC withdrawn — {tx_link_html(w_tx)}"
+                    )
+            except Exception as w_exc:
+                log.warning("redeem: proxy withdraw failed: %s", w_exc)
+
         # Get balance after
         try:
             bal_after, _, _ = await fetch_all_usdc(addr)
@@ -1278,9 +1305,19 @@ class CommandBot:
         gained = bal_after - bal_before
         results_text = "\n".join(results_lines) if results_lines else ""
 
+        # Show proxy wallet info for diagnostics
+        proxy_info = ""
+        try:
+            proxy_addr = await self.executor.get_proxy_wallet_address()
+            if proxy_addr:
+                proxy_info = f"Proxy wallet: <code>{proxy_addr[:10]}...{proxy_addr[-6:]}</code>\n"
+        except Exception:
+            pass
+
         text = (
             f"💰 <b>REDEEM COMPLETE</b>\n"
             f"{BAR}\n"
+            f"{proxy_info}"
             f"Winning trades: {len(seen_slugs)}\n"
             f"Redeemed: <b>{redeemed}</b> ✅\n"
             f"Gas est. failed: {skipped}\n"
