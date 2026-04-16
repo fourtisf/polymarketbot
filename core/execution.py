@@ -367,17 +367,32 @@ class Executor:
                 resp = await asyncio.to_thread(client.get_order, order_id)
                 if not isinstance(resp, dict):
                     continue
-                size_matched = float(resp.get("size_matched", 0) or 0)
+                size_matched = float(
+                    resp.get("size_matched")
+                    or resp.get("takingAmount")
+                    or resp.get("filled")
+                    or 0
+                )
                 status = resp.get("status", "")
                 log.debug("poll %s: status=%s matched=%.1f", order_id[:10], status, size_matched)
                 if size_matched > 0 or status in ("matched", "filled"):
                     tx_hash = self._extract_tx_hash(resp)
+                    avg = price
+                    if size_matched > 0 and resp.get("makingAmount"):
+                        try:
+                            avg = round(float(resp["makingAmount"]) / size_matched, 4)
+                        except (ValueError, ZeroDivisionError):
+                            pass
+                    elif resp.get("associate_trades"):
+                        try:
+                            avg = float(resp["associate_trades"][0].get("price", price))
+                        except (IndexError, KeyError, ValueError):
+                            pass
                     return FillResult(
                         success=True,
                         order_id=order_id,
-                        filled_shares=size_matched,
-                        avg_price=float(resp.get("associate_trades", [{}])[0].get("price", price))
-                        if resp.get("associate_trades") else price,
+                        filled_shares=size_matched if size_matched > 0 else 1.0,
+                        avg_price=avg,
                         tx_hash=tx_hash,
                     )
             except Exception as exc:
@@ -437,14 +452,28 @@ class Executor:
             return FillResult(success=False, error=str(err))
         order_id = resp.get("orderID") or resp.get("order_id") or ""
         status = resp.get("status", "")
-        filled = float(resp.get("filled", 0) or 0)
+        # Polymarket returns takingAmount (shares received) and makingAmount (USDC paid)
+        # for matched orders, NOT a "filled" field
+        filled = float(
+            resp.get("filled")
+            or resp.get("takingAmount")
+            or resp.get("size_matched")
+            or 0
+        )
         tx_hash = self._extract_tx_hash(resp)
-        log.info("order %s status=%s filled=%.1f", order_id[:10], status, filled)
+        # Calculate actual avg price from makingAmount/takingAmount if available
+        avg = price
+        if filled > 0 and resp.get("makingAmount"):
+            try:
+                avg = round(float(resp["makingAmount"]) / filled, 4)
+            except (ValueError, ZeroDivisionError):
+                pass
+        log.info("order %s status=%s filled=%.1f avg=%.4f", order_id[:10], status, filled, avg)
         return FillResult(
             success=status in ("matched", "live", "filled"),
             order_id=order_id,
             filled_shares=filled,
-            avg_price=price,
+            avg_price=avg,
             tx_hash=tx_hash,
         )
 
