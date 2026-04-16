@@ -36,8 +36,28 @@ NEG_RISK_ADAPTER = "0xd91E80cF2E7be2e162c6513ceD06f1dD0dA35296"
 USDC_E = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
 GAMMA_HOST = "https://gamma-api.polymarket.com"
 CLOB_HOST = "https://clob.polymarket.com"
+CTF_EXCHANGE = "0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E"
+PROXY_WALLET_FACTORY = "0xaB45c5A4B0c941a2F231C04C3f49182e1A254052"
 
 TRANSFER_SINGLE_TOPIC = "0xc3d58168c5ae7397731d063d5bbf3d657854427343f4c083240f7aacaa2d0f62"
+
+_proxy_wallet_cache = None
+
+
+async def get_proxy_wallet(session, address):
+    """Look up the proxy wallet address for an EOA."""
+    global _proxy_wallet_cache
+    if _proxy_wallet_cache:
+        return _proxy_wallet_cache
+    addr_padded = address.lower().replace("0x", "").rjust(64, "0")
+    call_data = "0xedef7d8e" + addr_padded
+    result = await rpc(session, "eth_call", [
+        {"to": CTF_EXCHANGE, "data": call_data}, "latest"
+    ])
+    if result and result != "0x" and len(result) >= 42:
+        _proxy_wallet_cache = "0x" + result[-40:]
+        return _proxy_wallet_cache
+    return None
 
 
 async def rpc(session, method, params):
@@ -252,70 +272,143 @@ def get_condition_from_logs(token_id_str):
     return None
 
 
-async def try_redeem(session, acct, condition_id, neg_risk=True):
-    """Redeem from EOA."""
-    cond_bytes = bytes.fromhex(condition_id.lower().replace("0x", "").rjust(64, "0"))
-
-    attempts = []
-    # CTF: redeemPositions(address, bytes32, bytes32, uint256[])
-    ctf_sel = bytes.fromhex("01b7037c")
-    ctf_params = eth_abi.encode(
-        ["address", "bytes32", "bytes32", "uint256[]"],
-        [USDC_E, b'\x00' * 32, cond_bytes, [1, 2]]
-    )
-    attempts.append((CTF_CONTRACT, "0x" + (ctf_sel + ctf_params).hex(), "CTF"))
-
-    # NegRisk: redeemPositions(bytes32, uint256[])
-    nr_sel = bytes.fromhex("dbeccb23")
-    nr_params = eth_abi.encode(["bytes32", "uint256[]"], [cond_bytes, [1, 2]])
-    attempts.append((NEG_RISK_ADAPTER, "0x" + (nr_sel + nr_params).hex(), "NegRisk"))
-
-    if neg_risk:
-        attempts.reverse()
-
-    for target, tx_data, label in attempts:
-        try:
-            est_hex = await rpc(session, "eth_estimateGas", [{
-                "from": acct.address, "to": target, "data": tx_data,
-            }])
-            estimated = int(est_hex, 16)
-            if estimated < 30_000:
-                continue
-
-            gas_limit = int(estimated * 1.5)
-            print(f"    {label} gas={estimated}, sending TX...")
-
-            nonce = int(await rpc(session, "eth_getTransactionCount",
-                                   [acct.address, "latest"]), 16)
-            gas_price = int(await rpc(session, "eth_gasPrice", []), 16)
-
-            tx = {
-                "to": bytes.fromhex(target.replace("0x", "")),
-                "value": 0, "gas": gas_limit, "gasPrice": gas_price,
-                "nonce": nonce, "chainId": 137,
-                "data": bytes.fromhex(tx_data.replace("0x", "")),
-            }
-            signed = acct.sign_transaction(tx)
-            raw = "0x" + signed.raw_transaction.hex()
-            tx_hash = await rpc(session, "eth_sendRawTransaction", [raw])
-            print(f"    TX: {tx_hash}")
-
-            deadline = time.time() + 60
-            while time.time() < deadline:
-                try:
-                    receipt = await rpc(session, "eth_getTransactionReceipt", [tx_hash])
-                    if receipt is not None:
-                        status = int(receipt.get("status", "0x0"), 16)
-                        print(f"    {'CONFIRMED' if status == 1 else 'REVERTED'}!")
-                        return tx_hash if status == 1 else None
-                except Exception:
-                    pass
-                await asyncio.sleep(2)
-            print(f"    TIMEOUT")
+async def send_and_wait(session, acct, to_addr, tx_data_hex, label=""):
+    """Sign, send, and wait for a transaction receipt."""
+    gas_limit = 300_000
+    try:
+        est_hex = await rpc(session, "eth_estimateGas", [{
+            "from": acct.address, "to": to_addr, "data": tx_data_hex,
+        }])
+        estimated = int(est_hex, 16)
+        if estimated < 30_000:
+            print(f"    {label} gas={estimated} (too low, skipping)")
             return None
+        gas_limit = int(estimated * 1.5)
+        print(f"    {label} gas={estimated}, sending TX...")
+    except Exception as e:
+        print(f"    {label} gas est failed: {e}")
+        return None
+
+    nonce = int(await rpc(session, "eth_getTransactionCount",
+                           [acct.address, "latest"]), 16)
+    gas_price = int(await rpc(session, "eth_gasPrice", []), 16)
+
+    tx = {
+        "to": bytes.fromhex(to_addr.replace("0x", "")),
+        "value": 0, "gas": gas_limit, "gasPrice": gas_price,
+        "nonce": nonce, "chainId": 137,
+        "data": bytes.fromhex(tx_data_hex.replace("0x", "")),
+    }
+    signed = acct.sign_transaction(tx)
+    raw = "0x" + signed.raw_transaction.hex()
+    tx_hash = await rpc(session, "eth_sendRawTransaction", [raw])
+    print(f"    TX: {tx_hash}")
+
+    deadline = time.time() + 60
+    while time.time() < deadline:
+        try:
+            receipt = await rpc(session, "eth_getTransactionReceipt", [tx_hash])
+            if receipt is not None:
+                status = int(receipt.get("status", "0x0"), 16)
+                print(f"    {'CONFIRMED' if status == 1 else 'REVERTED'}!")
+                return tx_hash if status == 1 else None
         except Exception:
             pass
+        await asyncio.sleep(2)
+    print(f"    TIMEOUT")
     return None
+
+
+async def try_redeem(session, acct, condition_id, neg_risk=True):
+    """Redeem via ProxyWalletFactory.proxy() first, fallback to direct EOA."""
+    cond_bytes = bytes.fromhex(condition_id.lower().replace("0x", "").rjust(64, "0"))
+
+    # Build inner calldata
+    if neg_risk:
+        inner_sel = bytes.fromhex("dbeccb23")
+        inner_params = eth_abi.encode(["bytes32", "uint256[]"], [cond_bytes, [1, 2]])
+        target = NEG_RISK_ADAPTER
+    else:
+        inner_sel = bytes.fromhex("01b7037c")
+        inner_params = eth_abi.encode(
+            ["address", "bytes32", "bytes32", "uint256[]"],
+            [USDC_E, b'\x00' * 32, cond_bytes, [1, 2]]
+        )
+        target = CTF_CONTRACT
+
+    inner_calldata = inner_sel + inner_params
+
+    # ── Approach 1: Via ProxyWalletFactory.proxy() ──
+    factory_sel = bytes.fromhex("34ee9791")
+    factory_params = eth_abi.encode(
+        ["(uint8,address,uint256,bytes)[]"],
+        [[(0, target, 0, inner_calldata)]]
+    )
+    factory_tx_data = "0x" + (factory_sel + factory_params).hex()
+
+    result = await send_and_wait(
+        session, acct, PROXY_WALLET_FACTORY, factory_tx_data, "ProxyFactory"
+    )
+    if result:
+        return result
+
+    # ── Approach 2: Direct EOA call (fallback) ──
+    direct_tx_data = "0x" + inner_calldata.hex()
+    result = await send_and_wait(
+        session, acct, target, direct_tx_data, "Direct"
+    )
+    if result:
+        return result
+
+    # ── Approach 3: Try the other contract type ──
+    if neg_risk:
+        alt_sel = bytes.fromhex("01b7037c")
+        alt_params = eth_abi.encode(
+            ["address", "bytes32", "bytes32", "uint256[]"],
+            [USDC_E, b'\x00' * 32, cond_bytes, [1, 2]]
+        )
+        alt_target = CTF_CONTRACT
+    else:
+        alt_sel = bytes.fromhex("dbeccb23")
+        alt_params = eth_abi.encode(["bytes32", "uint256[]"], [cond_bytes, [1, 2]])
+        alt_target = NEG_RISK_ADAPTER
+
+    alt_tx_data = "0x" + (alt_sel + alt_params).hex()
+    return await send_and_wait(session, acct, alt_target, alt_tx_data, "Alt-Direct")
+
+
+async def withdraw_proxy_usdc(session, acct):
+    """Transfer USDC.e from proxy wallet back to EOA."""
+    proxy_addr = await get_proxy_wallet(session, acct.address)
+    if not proxy_addr:
+        return None
+
+    # Check proxy USDC.e balance
+    ap = proxy_addr.lower().replace("0x", "").rjust(64, "0")
+    data = "0x70a08231" + "0" * 24 + ap[-40:]
+    result = await rpc(session, "eth_call", [{"to": USDC_E, "data": data}, "latest"])
+    balance = int(result, 16) if result and result != "0x" else 0
+    if balance == 0:
+        return None
+
+    print(f"  Proxy has ${balance/1e6:.2f} USDC.e — withdrawing to EOA...")
+
+    # Build transfer(address, uint256) calldata
+    transfer_sel = bytes.fromhex("a9059cbb")
+    transfer_params = eth_abi.encode(["address", "uint256"], [acct.address, balance])
+    transfer_calldata = transfer_sel + transfer_params
+
+    # Wrap in Factory.proxy()
+    factory_sel = bytes.fromhex("34ee9791")
+    factory_params = eth_abi.encode(
+        ["(uint8,address,uint256,bytes)[]"],
+        [[(0, USDC_E, 0, transfer_calldata)]]
+    )
+    factory_tx_data = "0x" + (factory_sel + factory_params).hex()
+
+    return await send_and_wait(
+        session, acct, PROXY_WALLET_FACTORY, factory_tx_data, "WithdrawProxy"
+    )
 
 
 async def main():
@@ -332,8 +425,18 @@ async def main():
 
     timeout = aiohttp.ClientTimeout(total=300)
     async with aiohttp.ClientSession(timeout=timeout) as session:
+        # Show proxy wallet info
+        proxy_addr = await get_proxy_wallet(session, eoa)
+        if proxy_addr:
+            proxy_bal = await get_usdc_balance(session, proxy_addr)
+            print(f"Proxy wallet: {proxy_addr}")
+            print(f"Proxy USDC.e: ${proxy_bal:.2f}")
+        else:
+            print(f"Proxy wallet: not found")
+            proxy_bal = 0.0
+
         bal_before = await get_usdc_balance(session, eoa)
-        print(f"USDC.e before: ${bal_before:.2f}\n")
+        print(f"EOA USDC.e:   ${bal_before:.2f}\n")
 
         # ── Collect token IDs from ALL sources ──
         print("COLLECTING TOKEN IDs...")
@@ -357,8 +460,8 @@ async def main():
             print("No token IDs found!")
             return
 
-        # ── Check balances ──
-        print("CHECKING BALANCES...")
+        # ── Check balances (EOA + proxy wallet) ──
+        print("CHECKING BALANCES (EOA + proxy wallet)...")
         tokens_with_balance = []
         checked = 0
         errors = 0
@@ -369,10 +472,21 @@ async def main():
                 continue
             checked += 1
             try:
-                bal = await get_ctf_balance(session, eoa, tid_int)
-                if bal > 0:
-                    tokens_with_balance.append((tid_str, bal))
-                    print(f"  HAS BALANCE: {tid_str[:20]}... = {bal} raw (${bal/1e6:.4f})")
+                # Check EOA balance
+                bal_eoa = await get_ctf_balance(session, eoa, tid_int)
+                # Check proxy wallet balance
+                bal_proxy = 0
+                if proxy_addr:
+                    bal_proxy = await get_ctf_balance(session, proxy_addr, tid_int)
+                bal_total = bal_eoa + bal_proxy
+                if bal_total > 0:
+                    location = []
+                    if bal_eoa > 0:
+                        location.append(f"EOA={bal_eoa}")
+                    if bal_proxy > 0:
+                        location.append(f"proxy={bal_proxy}")
+                    tokens_with_balance.append((tid_str, bal_total))
+                    print(f"  HAS BALANCE: {tid_str[:20]}... = {bal_total} raw (${bal_total/1e6:.4f}) [{', '.join(location)}]")
             except Exception:
                 errors += 1
                 await asyncio.sleep(1)  # Back off on errors
@@ -385,8 +499,13 @@ async def main():
         print(f"  Total value: ${total_value:.2f}\n")
 
         if not tokens_with_balance:
-            print("No tokens with balance at EOA.")
-            print("All winning positions may have already been redeemed or lost.")
+            print("No tokens with balance at EOA or proxy wallet.")
+            # Still try to withdraw any USDC.e stuck in proxy
+            if proxy_addr and proxy_bal > 0.01:
+                print(f"\nWithdrawing ${proxy_bal:.2f} USDC.e from proxy wallet...")
+                wtx = await withdraw_proxy_usdc(session, acct)
+                if wtx:
+                    print(f"Withdrawal TX: {wtx}")
             return
 
         # ── Look up conditions and redeem ──
@@ -430,10 +549,23 @@ async def main():
 
             await asyncio.sleep(0.5)
 
+        # ── Withdraw USDC.e from proxy wallet to EOA ──
+        if proxy_addr:
+            print("\nChecking proxy wallet for USDC.e to withdraw...")
+            wtx = await withdraw_proxy_usdc(session, acct)
+            if wtx:
+                print(f"  Proxy USDC.e withdrawal TX: {wtx}")
+            else:
+                print(f"  No USDC.e to withdraw from proxy")
+
         # ── Final report ──
         print()
+        await asyncio.sleep(3)  # Wait for state to settle
         bal_after = await get_usdc_balance(session, eoa)
         gained = bal_after - bal_before
+        proxy_bal_after = 0.0
+        if proxy_addr:
+            proxy_bal_after = await get_usdc_balance(session, proxy_addr)
         print(f"{'='*60}")
         print(f"RESULTS")
         print(f"{'='*60}")
@@ -442,10 +574,14 @@ async def main():
         print(f"Redeemed: {redeemed}")
         print(f"Failed: {failed}")
         print(f"No conditionId: {no_cond}")
-        print(f"USDC.e before: ${bal_before:.2f}")
-        print(f"USDC.e after:  ${bal_after:.2f}")
+        print(f"EOA USDC.e before:  ${bal_before:.2f}")
+        print(f"EOA USDC.e after:   ${bal_after:.2f}")
+        if proxy_addr:
+            print(f"Proxy USDC.e after: ${proxy_bal_after:.2f}")
         if gained > 0:
-            print(f"GAINED:        +${gained:.2f}")
+            print(f"GAINED:             +${gained:.2f}")
+        else:
+            print(f"Change:             ${gained:.2f}")
         print(f"{'='*60}")
 
 

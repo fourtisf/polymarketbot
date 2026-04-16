@@ -413,6 +413,9 @@ class CommandBot:
             {"command": "risk", "description": "Risk status"},
             {"command": "status", "description": "Current live window"},
             {"command": "settings", "description": "Edit settings"},
+            {"command": "pos", "description": "Current open position details"},
+            {"command": "exit", "description": "Close/sell current position"},
+            {"command": "recover", "description": "Find & recover all USDC.e"},
             {"command": "redeem", "description": "Claim winning positions → USDC.e"},
             {"command": "pause", "description": "30 min cooldown"},
             {"command": "help", "description": "Show all commands"},
@@ -505,6 +508,12 @@ class CommandBot:
             "/config": self._cmd_settings,
             "/redeem": self._cmd_redeem,
             "/claim": self._cmd_redeem,
+            "/pos": self._cmd_position,
+            "/position": self._cmd_position,
+            "/exit": self._cmd_exit,
+            "/close": self._cmd_exit,
+            "/recover": self._cmd_recover,
+            "/sweep": self._cmd_recover,
             "/pause": self._cmd_pause,
             "/help": self._cmd_help,
         }
@@ -543,11 +552,17 @@ class CommandBot:
         elif data == "nav:dashboard":
             await self._send_dashboard(chat_id, edit_msg_id=msg_id)
 
-        # Wallet refresh / redeem
+        # Wallet refresh / redeem / position
         elif data == "wallet:refresh":
             await self._cmd_wallet([], chat_id)
         elif data == "wallet:redeem":
             await self._cmd_redeem([], chat_id)
+        elif data == "nav:position":
+            await self._cmd_position([], chat_id)
+        elif data == "nav:exit":
+            await self._cmd_exit([], chat_id)
+        elif data == "nav:recover":
+            await self._cmd_recover([], chat_id)
 
         # Mode toggle flow (confirmation required for LIVE)
         elif data == "mode:toggle":
@@ -729,6 +744,34 @@ class CommandBot:
         a = self.pnl.alltime_stats()
         session_pnl = self.risk.state.session_pnl
 
+        # Current position info
+        pos_text = ""
+        bot = self.trading_bot
+        if bot and bot.state.entered_this_window and bot.state.entry_record:
+            rec = bot.state.entry_record
+            w = bot.state.window
+            side = rec.get("side", "?")
+            entry_px = rec.get("entry_price", 0)
+            shares = rec.get("shares", 0)
+            cost = rec.get("cost", 0)
+            secs = w.seconds_remaining if w else 0
+            # Current market price for this side
+            cur_px = 0.0
+            if w and bot.state.token_up_price and side == "UP":
+                cur_px = bot.state.token_up_price
+            elif w and bot.state.token_down_price and side == "DOWN":
+                cur_px = bot.state.token_down_price
+            cur_val = cur_px * shares if cur_px > 0 else 0
+            unreal_pnl = cur_val - cost if cur_val > 0 else 0
+            pos_text = (
+                f"\n📍 <b>OPEN POSITION</b>\n"
+                f"Side: {side} | Entry: ${entry_px:.3f}\n"
+                f"Shares: {shares:.0f} | Cost: ${cost:.2f}\n"
+                f"Current: ${cur_px:.3f} | Value: ${cur_val:.2f}\n"
+                f"Unrealized: <b>{unreal_pnl:+.2f}</b> {_ico(unreal_pnl)}\n"
+                f"Closes in: {secs}s\n"
+            )
+
         text = (
             f"🏠 <b>DASHBOARD</b>\n"
             f"{status} · {mode}\n"
@@ -739,7 +782,8 @@ class CommandBot:
             f"Session:  <b>{session_pnl:+.2f}</b> {_ico(session_pnl)}\n"
             f"Today:    {t['pnl']:+.2f} · {t['trades']}t · WR {t['win_rate']}%\n"
             f"All-time: {a['pnl']:+.2f} · {a['trades']}t · WR {a['win_rate']}%\n"
-            f"Balance:  ${a['current_balance']:.2f} (ROI {a['roi_pct']:+.1f}%)\n"
+            f"Balance:  <b>${usdc:,.2f}</b> (on-chain)"
+            f"{pos_text}\n"
             f"{BAR}\n"
             f"Pick an action:"
         )
@@ -748,6 +792,10 @@ class CommandBot:
             [
                 {"text": "▶️ Start Trading", "callback_data": "nav:go"},
                 {"text": "⏸ Stop Trading",  "callback_data": "nav:stop"},
+            ],
+            [
+                {"text": "📍 Position", "callback_data": "nav:position"},
+                {"text": "🚪 Exit",     "callback_data": "nav:exit"},
             ],
             [
                 {"text": "📊 Stats",  "callback_data": "nav:stats"},
@@ -1018,6 +1066,16 @@ class CommandBot:
         m = self._month_stats()
         a = self.pnl.alltime_stats()
         sess = self.risk.state.session_pnl
+
+        # Fetch actual on-chain balance
+        usdc_onchain = 0.0
+        addr = config.POLYGON_PUBLIC_KEY or ""
+        if addr.startswith("0x") and len(addr) == 42:
+            try:
+                usdc_onchain, _ = await fetch_balances(addr)
+            except Exception:
+                pass
+
         await self.notifier.send_text(
             f"💰 <b>PnL SUMMARY</b>\n"
             f"{BAR}\n"
@@ -1031,8 +1089,7 @@ class CommandBot:
             f"All Time:  {a['pnl']:+.2f} {_ico(a['pnl'])} "
             f"({a['trades']}t · WR {a['win_rate']}%)\n"
             f"{BAR}\n"
-            f"Balance: <b>${a['current_balance']:.2f}</b> "
-            f"(ROI {a['roi_pct']:+.1f}%)",
+            f"Balance: <b>${usdc_onchain:,.2f}</b> (on-chain USDC.e)",
             chat_id=chat_id,
         )
 
@@ -1048,6 +1105,16 @@ class CommandBot:
         t = self.pnl.today_stats()
         a = self.pnl.alltime_stats()
         streak = self.pnl.current_streak()
+
+        # Fetch actual on-chain balance
+        usdc_onchain = 0.0
+        addr = config.POLYGON_PUBLIC_KEY or ""
+        if addr.startswith("0x") and len(addr) == 42:
+            try:
+                usdc_onchain, _ = await fetch_balances(addr)
+            except Exception:
+                pass
+
         text = (
             f"📊 <b>FULL STATISTICS</b>\n"
             f"{BAR}\n"
@@ -1055,7 +1122,7 @@ class CommandBot:
             f"{BAR}\n"
             f"{_fmt_stats_block('All-time', a)}\n"
             f"{BAR}\n"
-            f"Balance:     <b>${a['current_balance']:.2f}</b>\n"
+            f"Balance:     <b>${usdc_onchain:,.2f}</b> (on-chain)\n"
             f"Starting:    ${a['starting_balance']:.2f}\n"
             f"ROI:         {a['roi_pct']:+.2f}%\n"
             f"Max DD:      {a['max_drawdown']:+.2f}\n"
@@ -1125,6 +1192,232 @@ class CommandBot:
             f"Trades {a['trades']}"
         )
         await self.notifier.send_photo(png, caption=caption, chat_id=chat_id)
+
+    async def _cmd_position(self, args, chat_id):
+        """Show current open position with real-time details."""
+        bot = self.trading_bot
+        if not bot or not bot.state.entered_this_window or not bot.state.entry_record:
+            await self.notifier.send_text(
+                "📍 <b>NO OPEN POSITION</b>\n"
+                f"{BAR}\n"
+                "No active trade in current window.\n"
+                "Bot will enter on next signal.",
+                chat_id=chat_id,
+            )
+            return
+
+        rec = bot.state.entry_record
+        w = bot.state.window
+        side = rec.get("side", "?")
+        entry_px = rec.get("entry_price", 0)
+        shares = rec.get("shares", 0)
+        cost = rec.get("cost", 0)
+        confidence = rec.get("confidence", 0)
+        order_id = rec.get("order_id", "")
+        tx_hash = rec.get("tx_hash", "")
+        token_id = rec.get("token_id", "")
+        condition_id = rec.get("condition_id", "")
+        slug = rec.get("window_slug", "")
+        secs = w.seconds_remaining if w else 0
+        ptb = w.price_to_beat if w else 0
+        btc_now = bot.state.current_btc or 0
+
+        # Current market price
+        cur_px = 0.0
+        if side == "UP" and bot.state.token_up_price:
+            cur_px = bot.state.token_up_price
+        elif side == "DOWN" and bot.state.token_down_price:
+            cur_px = bot.state.token_down_price
+
+        cur_val = cur_px * shares if cur_px > 0 else 0
+        unreal_pnl = cur_val - cost if cur_val > 0 else 0
+
+        # BTC delta
+        delta_str = ""
+        if ptb and btc_now:
+            delta = (btc_now - ptb) / ptb * 100
+            direction = "UP" if btc_now >= ptb else "DOWN"
+            delta_str = f"BTC: ${btc_now:,.2f} ({delta:+.3f}%) = {direction}\n"
+
+        # Max payout if win
+        max_payout = shares * 1.0  # Each share pays $1 if win
+        max_profit = max_payout - cost
+
+        tx_line = f"TX: {tx_link_html(tx_hash)}\n" if tx_hash else ""
+        order_line = f"Order: <code>{order_id[:20]}</code>\n" if order_id else ""
+        market_lnk = market_link_html(slug) if slug else ""
+
+        text = (
+            f"📍 <b>OPEN POSITION</b>\n"
+            f"{BAR}\n"
+            f"Side: <b>{side}</b> | Score: {confidence}/100\n"
+            f"Entry: ${entry_px:.3f} x {shares:.0f} shares\n"
+            f"Cost: <b>${cost:.2f}</b>\n"
+            f"{BAR}\n"
+            f"Current price: ${cur_px:.3f}\n"
+            f"Current value: ${cur_val:.2f}\n"
+            f"Unrealized PnL: <b>{unreal_pnl:+.2f}</b> {_ico(unreal_pnl)}\n"
+            f"{BAR}\n"
+            f"{delta_str}"
+            f"Price to beat: ${ptb:,.2f}\n"
+            f"Closes in: <b>{secs}s</b>\n"
+            f"{BAR}\n"
+            f"If WIN:  +${max_profit:.2f} (shares x $1.00)\n"
+            f"If LOSS: -${cost:.2f}\n"
+            f"{BAR}\n"
+            f"{order_line}"
+            f"{tx_line}"
+            f"Condition: <code>{condition_id[:20] if condition_id else 'pending'}</code>\n"
+            + (f"Market: {market_lnk}" if market_lnk else "")
+        )
+
+        kb = {"inline_keyboard": [
+            [{"text": "🔄 Refresh", "callback_data": "nav:position"}],
+            [{"text": "🚪 Exit Position", "callback_data": "nav:exit"}],
+            [{"text": "🏠 Dashboard", "callback_data": "nav:dashboard"}],
+        ]}
+        await self.notifier.send_text(text, chat_id=chat_id, reply_markup=kb)
+
+    async def _cmd_exit(self, args, chat_id):
+        """Exit/close current position by selling tokens back on CLOB."""
+        bot = self.trading_bot
+        if not bot or not bot.state.entered_this_window or not bot.state.entry_record:
+            await self.notifier.send_text(
+                "🚪 No open position to exit.", chat_id=chat_id
+            )
+            return
+
+        rec = bot.state.entry_record
+        side = rec.get("side", "?")
+        token_id = rec.get("token_id", "")
+        shares = rec.get("shares", 0)
+        cost = rec.get("cost", 0)
+        entry_px = rec.get("entry_price", 0)
+
+        if not token_id:
+            await self.notifier.send_text(
+                "🚪 Cannot exit: no token_id in position.", chat_id=chat_id
+            )
+            return
+
+        # Get current best bid to sell at
+        best_bid = 0.0
+        if side == "UP" and bot.state.token_up_price:
+            best_bid = max(0.01, bot.state.token_up_price - 0.01)
+        elif side == "DOWN" and bot.state.token_down_price:
+            best_bid = max(0.01, bot.state.token_down_price - 0.01)
+        else:
+            best_bid = max(0.01, entry_px - 0.02)
+
+        await self.notifier.send_text(
+            f"🚪 <b>CLOSING POSITION...</b>\n"
+            f"Selling {shares:.0f} {side} shares @ ${best_bid:.3f}",
+            chat_id=chat_id,
+        )
+
+        try:
+            # Place a SELL order via CLOB
+            client = self.executor._init_client()
+            if client is None:
+                await self.notifier.send_text(
+                    "❌ CLOB client unavailable.", chat_id=chat_id
+                )
+                return
+
+            from py_clob_client.clob_types import OrderArgs, OrderType
+
+            def _sell():
+                order_args = OrderArgs(
+                    price=round(best_bid, 2),
+                    size=int(shares),
+                    side="SELL",
+                    token_id=token_id,
+                )
+                signed = client.create_order(order_args)
+                return client.post_order(signed, OrderType.GTC)
+
+            resp = await asyncio.to_thread(_sell)
+            log.info("exit sell resp: %s", resp)
+
+            if isinstance(resp, dict) and resp.get("orderID"):
+                sell_pnl = (best_bid - entry_px) * shares
+                # Wait briefly for fill
+                await asyncio.sleep(3)
+
+                # Fetch updated balance
+                bal_str = ""
+                addr = config.POLYGON_PUBLIC_KEY or ""
+                if addr.startswith("0x") and len(addr) == 42:
+                    try:
+                        usdc_bal, _, _ = await fetch_all_usdc(addr)
+                        bal_str = f"\n💵 USDC.e: <b>${usdc_bal:,.2f}</b>"
+                    except Exception:
+                        pass
+
+                await self.notifier.send_text(
+                    f"🚪 <b>POSITION CLOSED</b>\n"
+                    f"{BAR}\n"
+                    f"Sold: {shares:.0f} {side} @ ${best_bid:.3f}\n"
+                    f"Entry: ${entry_px:.3f} | Exit: ${best_bid:.3f}\n"
+                    f"PnL: <b>{sell_pnl:+.2f}</b>\n"
+                    f"Order: <code>{resp['orderID'][:20]}</code>"
+                    f"{bal_str}",
+                    chat_id=chat_id,
+                )
+
+                # Mark position as closed
+                bot.state.entered_this_window = True  # Prevent re-entry
+                bot.state.entry_record = None
+            else:
+                err = resp.get("errorMsg") or resp.get("error") or str(resp)
+                await self.notifier.send_text(
+                    f"❌ Exit failed: {str(err)[:100]}", chat_id=chat_id
+                )
+        except Exception as exc:
+            await self.notifier.send_text(
+                f"❌ Exit error: {str(exc)[:100]}", chat_id=chat_id
+            )
+
+    async def _cmd_recover(self, args, chat_id):
+        """Run comprehensive balance recovery — find and collect all USDC.e."""
+        await self.notifier.send_text(
+            "\U0001f50d <b>BALANCE RECOVERY</b>\nScanning all locations...",
+            chat_id=chat_id,
+        )
+        try:
+            result = await self.executor.full_balance_recovery()
+            eoa = result.get("eoa_balance", 0)
+            proxy = result.get("proxy_balance", 0)
+            clob = result.get("clob_balance", 0)
+            orders = result.get("open_orders", 0)
+            recovered = result.get("recovered", 0)
+            actions = result.get("actions", [])
+
+            actions_text = ""
+            if actions:
+                actions_text = "\n".join(f"  - {a}" for a in actions)
+                actions_text = f"\n\n<b>Actions taken:</b>\n{actions_text}"
+
+            text = (
+                f"\U0001f4b0 <b>RECOVERY REPORT</b>\n"
+                f"{BAR}\n"
+                f"EOA wallet: <b>${eoa:,.2f}</b>\n"
+                f"Proxy wallet: ${proxy:,.2f}\n"
+                f"CLOB exchange: ${clob:,.2f}\n"
+                f"Open orders: {orders}\n"
+                f"{BAR}\n"
+                f"Recovered: <b>${recovered:,.2f}</b>"
+                f"{actions_text}"
+            )
+            kb = {"inline_keyboard": [
+                [{"text": "\U0001f504 Run Again", "callback_data": "nav:recover"}],
+                [{"text": "\U0001f3e0 Dashboard", "callback_data": "nav:dashboard"}],
+            ]}
+            await self.notifier.send_text(text, chat_id=chat_id, reply_markup=kb)
+        except Exception as exc:
+            await self.notifier.send_text(
+                f"\u274c Recovery error: {str(exc)[:200]}", chat_id=chat_id
+            )
 
     async def _cmd_risk(self, args, chat_id):
         snap = self.risk.snapshot()
@@ -1385,7 +1678,10 @@ class CommandBot:
             "<b>Trading</b>\n"
             "/go     — Start auto trading\n"
             "/stop   — Stop auto trading\n"
+            "/pos    — Current open position details\n"
+            "/exit   — Close/sell current position\n"
             "/mode   — Toggle DRY-RUN / LIVE\n"
+            "/recover — Find & recover all USDC.e\n"
             "/redeem — Claim winning positions → USDC.e\n"
             "/pause  — 30 min cooldown\n"
             f"{BAR}\n"

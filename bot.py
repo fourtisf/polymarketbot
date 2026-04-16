@@ -156,6 +156,10 @@ class TradingBot:
         self._tasks.append(asyncio.create_task(self._trading_loop(), name="trading"))
         self._tasks.append(asyncio.create_task(self._live_state_loop(), name="live_state"))
 
+        # Background task: periodically sweep proxy wallet USDC.e to EOA
+        if not self.dry_run:
+            self._tasks.append(asyncio.create_task(self._proxy_sweep_loop(), name="proxy_sweep"))
+
         mode = "DRY-RUN" if self.dry_run else "LIVE"
         await self.notifier.send_text(
             f"🚀 <b>Bot started</b> ({mode})\n"
@@ -370,6 +374,14 @@ class TradingBot:
         best_ask = fresh_ask if fresh_ask and fresh_ask > 0 else decision.token_price
         best_ask = round(max(0.01, best_ask), 2)
 
+        # CRITICAL: Re-check price gate with FRESH price (strategy used stale price)
+        if best_ask >= 0.55:
+            log.warning("fresh price $%.2f >= 0.55 — skipping (was $%.2f at strategy time)",
+                        best_ask, decision.token_price)
+            self.state.entered_this_window = True
+            await self._log_skip(None, {"skip_reason": f"fresh_price_too_high:{best_ask}"})
+            return
+
         fill = await self.executor.place_limit_buy(
             token_id=decision.token_id,
             price=best_ask,
@@ -551,14 +563,12 @@ class TradingBot:
 
         # Notification
         today = self.pnl.today_stats()
-        alltime = self.pnl.alltime_stats()
         delta_close = (close_price - w.price_to_beat) / w.price_to_beat * 100
         market_lnk = market_link_html(w.slug)
         tx_lnk = tx_link_html(rec.get("tx_hash", "")) if rec.get("tx_hash") else ""
         wins_today = today.get("wins", 0)
         losses_today = today.get("losses", 0)
         wr = today.get("win_rate", 0)
-        bal = alltime["current_balance"]
         tx_line = f"\nTX: {tx_lnk}" if tx_lnk else ""
         if win:
             text = (
@@ -569,7 +579,7 @@ class TradingBot:
                 f"{tx_line}\n"
                 f"🔗 {market_lnk}\n"
                 f"Today: {today['pnl']:+.2f} "
-                f"({wins_today}W/{losses_today}L) {wr}% | Bot balance: ${bal:.2f}"
+                f"({wins_today}W/{losses_today}L) {wr}%"
                 f"{onchain_bal}"
             )
         else:
@@ -581,7 +591,7 @@ class TradingBot:
                 f"{tx_line}\n"
                 f"🔗 {market_lnk}\n"
                 f"Today: {today['pnl']:+.2f} "
-                f"({wins_today}W/{losses_today}L) {wr}% | Bot balance: ${bal:.2f}"
+                f"({wins_today}W/{losses_today}L) {wr}%"
                 f"{onchain_bal}"
             )
         await self.notifier.send_text(text)
@@ -610,22 +620,19 @@ class TradingBot:
         self.state.entry_record = None
         self.state.entered_this_window = False
 
-    async def _auto_redeem(self, condition_id: str,
-                          neg_risk: bool = True) -> None:
-        """Redeem winning conditional tokens → USDC.e with retries.
+    async def _proxy_sweep_loop(self) -> None:
+        """Periodically sweep USDC.e from proxy wallet to EOA.
 
-        The on-chain oracle may take a few seconds to report the resolution,
-        so we retry up to 3 times with increasing delays.
+        Polymarket may auto-redeem winning positions, depositing USDC.e
+        into the proxy wallet or CLOB exchange balance. This background
+        task ensures money is recovered every 60 seconds.
         """
-        for attempt in range(3):
-            # Wait for oracle to report on-chain resolution
-            await asyncio.sleep(10 + attempt * 15)
+        await asyncio.sleep(20)  # Initial delay
+        while not self._stopping:
             try:
-                tx_hash = await self.executor.redeem_positions(
-                    condition_id, neg_risk=neg_risk
-                )
-                if tx_hash:
-                    # Fetch new balance after redeem
+                # 1. Sweep proxy wallet USDC.e
+                tx = await self.executor.withdraw_proxy_usdc()
+                if tx:
                     bal_str = ""
                     try:
                         usdc_bal, _, _ = await fetch_all_usdc(config.POLYGON_PUBLIC_KEY)
@@ -633,19 +640,134 @@ class TradingBot:
                     except Exception:
                         pass
                     await self.notifier.send_text(
-                        f"💰 <b>Tokens redeemed</b>\n"
+                        f"💸 <b>Proxy sweep: USDC.e withdrawn to EOA</b>\n"
+                        f"TX: {tx_link_html(tx)}"
+                        f"{bal_str}"
+                    )
+
+                # 2. Cancel stale open orders (free locked USDC)
+                try:
+                    open_orders = await self.executor.get_open_orders()
+                    if open_orders:
+                        log.info("sweep: found %d open orders — canceling",
+                                 len(open_orders))
+                        await self.executor.cancel_all_open_orders()
+                        await asyncio.sleep(3)
+                        # Try proxy sweep again after cancel
+                        tx2 = await self.executor.withdraw_proxy_usdc()
+                        if tx2:
+                            bal_str = ""
+                            try:
+                                usdc_bal, _, _ = await fetch_all_usdc(
+                                    config.POLYGON_PUBLIC_KEY)
+                                bal_str = f"\n💵 USDC.e: <b>${usdc_bal:,.2f}</b>"
+                            except Exception:
+                                pass
+                            await self.notifier.send_text(
+                                f"💸 <b>Post-cancel sweep: USDC.e to EOA</b>\n"
+                                f"TX: {tx_link_html(tx2)}"
+                                f"{bal_str}"
+                            )
+                except Exception as exc:
+                    log.debug("sweep cancel-orders: %s", exc)
+
+            except Exception as exc:
+                log.debug("proxy sweep: %s", exc)
+            await asyncio.sleep(60)  # Every 60 seconds (was 180)
+
+    async def _auto_redeem(self, condition_id: str,
+                          neg_risk: bool = True) -> None:
+        """Redeem winning conditional tokens → USDC.e with retries.
+
+        The on-chain oracle may take a few seconds to report the resolution,
+        so we retry up to 5 times with increasing delays (up to ~2 minutes).
+        After successful redeem, also withdraw any USDC.e from proxy wallet.
+        """
+        await self.notifier.send_text(
+            f"🔄 <b>Auto-redeem started</b>\n"
+            f"Condition: <code>{condition_id[:20]}</code>\n"
+            f"NegRisk: {neg_risk}"
+        )
+
+        for attempt in range(5):
+            # Wait for oracle — longer delays for later attempts
+            delay = 10 + attempt * 20  # 10s, 30s, 50s, 70s, 90s
+            await asyncio.sleep(delay)
+            try:
+                tx_hash = await self.executor.redeem_positions(
+                    condition_id, neg_risk=neg_risk
+                )
+                if tx_hash:
+                    # After redeem, withdraw USDC.e from proxy wallet to EOA
+                    withdraw_tx = None
+                    try:
+                        await asyncio.sleep(5)
+                        withdraw_tx = await self.executor.withdraw_proxy_usdc()
+                        if withdraw_tx:
+                            log.info("proxy USDC.e withdrawn: tx=%s", withdraw_tx)
+                    except Exception as exc:
+                        log.warning("proxy USDC.e withdrawal failed: %s", exc)
+
+                    bal_str = ""
+                    try:
+                        usdc_bal, _, _ = await fetch_all_usdc(config.POLYGON_PUBLIC_KEY)
+                        bal_str = f"\n💵 USDC.e: <b>${usdc_bal:,.2f}</b>"
+                    except Exception:
+                        pass
+                    withdraw_line = ""
+                    if withdraw_tx:
+                        withdraw_line = f"\n💸 Proxy→EOA: {tx_link_html(withdraw_tx)}"
+                    await self.notifier.send_text(
+                        f"💰 <b>Tokens redeemed</b> (attempt {attempt+1})\n"
                         f"TX: {tx_link_html(tx_hash)}"
+                        f"{withdraw_line}"
                         f"{bal_str}"
                     )
                     return
-                log.info("redeem attempt %d: no tx (oracle may not have reported yet)", attempt + 1)
+                log.info("redeem attempt %d/%d: no tx yet", attempt + 1, 5)
             except Exception as exc:
-                log.warning("redeem attempt %d failed: %s", attempt + 1, exc)
-        log.warning("auto-redeem failed after 3 attempts for condition %s", condition_id[:16])
+                log.warning("redeem attempt %d/%d failed: %s", attempt + 1, 5, exc)
+
+        # All redeem attempts failed — comprehensive recovery fallback
+        log.info("auto-redeem: all 5 attempts failed — running full recovery")
+        try:
+            # Cancel any stale orders that might lock USDC
+            await self.executor.cancel_all_open_orders()
+            await asyncio.sleep(3)
+
+            # Try proxy USDC withdrawal
+            withdraw_tx = await self.executor.withdraw_proxy_usdc()
+            if withdraw_tx:
+                bal_str = ""
+                try:
+                    usdc_bal, _, _ = await fetch_all_usdc(config.POLYGON_PUBLIC_KEY)
+                    bal_str = f"\n💵 USDC.e: <b>${usdc_bal:,.2f}</b>"
+                except Exception:
+                    pass
+                await self.notifier.send_text(
+                    f"💸 <b>Proxy USDC.e withdrawn to EOA</b>\n"
+                    f"TX: {tx_link_html(withdraw_tx)}"
+                    f"{bal_str}"
+                )
+                return
+        except Exception as exc:
+            log.warning("proxy withdrawal fallback failed: %s", exc)
+
+        # Final: report current balance state
+        try:
+            from eth_account import Account
+            acct = Account.from_key(config.POLYGON_PRIVATE_KEY)
+            eoa_bal = await self.executor.get_onchain_usdc_balance(acct.address)
+            log.info("auto-redeem fallback: EOA balance = $%.2f", eoa_bal)
+        except Exception:
+            pass
+
+        log.warning("auto-redeem failed after 5 attempts for condition %s", condition_id[:16])
         await self.notifier.send_text(
-            f"⚠️ Auto-redeem failed after 3 attempts.\n"
+            f"⚠️ Auto-redeem failed after 5 attempts.\n"
             f"Condition: <code>{condition_id[:20]}</code>\n"
-            f"You may need to redeem manually on polymarket.com"
+            f"Proxy sweep runs every 60s — money will be recovered automatically.\n"
+            f"Or try /redeem manually."
         )
 
 

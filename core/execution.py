@@ -552,8 +552,10 @@ class Executor:
         """
         Redeem resolved conditional tokens back to USDC.e.
 
-        Tokens are held at the EOA (confirmed by diagnostics).
-        Try direct EOA call to redeemPositions on CTF and NegRisk contracts.
+        Polymarket holds tokens at the PROXY WALLET, not the EOA.
+        Strategy:
+          1. Try via ProxyWalletFactory.proxy() (tokens at proxy wallet)
+          2. Fallback to direct EOA call (in case tokens are at EOA)
         """
         if self.dry_run or not condition_id:
             return None
@@ -567,35 +569,24 @@ class Executor:
         cond_bytes = bytes.fromhex(cond_padded)
 
         # Build redeemPositions calldata for BOTH contract types
-        # ── 1. NegRisk: redeemPositions(bytes32 conditionId, uint256[] indexSets)
-        nr_selector = bytes.fromhex("dbeccb23")
-        nr_params = eth_abi.encode(
-            ["bytes32", "uint256[]"],
-            [cond_bytes, [1, 2]]
-        )
-        neg_risk_calldata = nr_selector + nr_params
-
-        # ── 2. Standard CTF: redeemPositions(address, bytes32, bytes32, uint256[])
-        ctf_selector = bytes.fromhex("01b7037c")
-        ctf_params = eth_abi.encode(
-            ["address", "bytes32", "bytes32", "uint256[]"],
-            [self.USDC_E, b'\x00' * 32, cond_bytes, [1, 2]]
-        )
-        ctf_calldata = ctf_selector + ctf_params
-
-        # Try all contracts — direct EOA call (tokens are at EOA)
-        attempts = [
-            (self.CTF_CONTRACT, ctf_calldata, "CTF"),
-            (self.NEG_RISK_ADAPTER, neg_risk_calldata, "NegRiskAdapter"),
-            (self.NEG_RISK_EXCHANGE, neg_risk_calldata, "NegRiskExchange"),
-        ]
         if neg_risk:
-            # NegRisk markets: try NegRisk contracts first
-            attempts = [
-                (self.NEG_RISK_ADAPTER, neg_risk_calldata, "NegRiskAdapter"),
-                (self.CTF_CONTRACT, ctf_calldata, "CTF"),
-                (self.NEG_RISK_EXCHANGE, neg_risk_calldata, "NegRiskExchange"),
-            ]
+            # NegRisk: redeemPositions(bytes32 conditionId, uint256[] indexSets)
+            inner_selector = bytes.fromhex("dbeccb23")
+            inner_params = eth_abi.encode(
+                ["bytes32", "uint256[]"],
+                [cond_bytes, [1, 2]]
+            )
+            target_contract = self.NEG_RISK_ADAPTER
+        else:
+            # Standard CTF: redeemPositions(address, bytes32, bytes32, uint256[])
+            inner_selector = bytes.fromhex("01b7037c")
+            inner_params = eth_abi.encode(
+                ["address", "bytes32", "bytes32", "uint256[]"],
+                [self.USDC_E, b'\x00' * 32, cond_bytes, [1, 2]]
+            )
+            target_contract = self.CTF_CONTRACT
+
+        inner_calldata = inner_selector + inner_params
 
         log.info("redeem: condition=%s neg_risk=%s eoa=%s",
                  condition_id[:16], neg_risk, acct.address)
@@ -603,15 +594,85 @@ class Executor:
         async with aiohttp.ClientSession(
             timeout=aiohttp.ClientTimeout(total=60)
         ) as session:
-            for target_contract, inner_calldata, label in attempts:
-                direct_tx_data = "0x" + inner_calldata.hex()
+            # ── Approach 1: Via ProxyWalletFactory.proxy() ──
+            # This is the correct approach — tokens live at the proxy wallet
+            factory_selector = bytes.fromhex("34ee9791")
+            factory_params = eth_abi.encode(
+                ["(uint8,address,uint256,bytes)[]"],
+                [[(0, target_contract, 0, inner_calldata)]]
+            )
+            factory_tx_data = "0x" + (factory_selector + factory_params).hex()
+
+            log.info("redeem: trying via ProxyWalletFactory.proxy()")
+            try:
+                est_hex = await self._rpc(session, "eth_estimateGas", [{
+                    "from": acct.address,
+                    "to": self.PROXY_WALLET_FACTORY,
+                    "data": factory_tx_data,
+                }])
+                estimated = int(est_hex, 16)
+                if estimated >= 30_000:
+                    gas_limit = int(estimated * 1.5)
+                    log.info("redeem: proxy factory gas=%d, using %d",
+                             estimated, gas_limit)
+                    nonce = int(await self._rpc(
+                        session, "eth_getTransactionCount",
+                        [acct.address, "latest"]
+                    ), 16)
+                    gas_price = int(await self._rpc(
+                        session, "eth_gasPrice", []
+                    ), 16)
+                    tx_hash = await self._sign_and_send(
+                        session, acct, self.PROXY_WALLET_FACTORY,
+                        factory_tx_data, nonce, gas_price, gas=gas_limit,
+                    )
+                    if tx_hash:
+                        ok = await self._wait_receipt(session, tx_hash)
+                        log.info("redeem proxy factory tx=%s ok=%s", tx_hash, ok)
+                        if ok:
+                            return tx_hash
+                        log.error("redeem proxy factory TX reverted: %s", tx_hash)
+                else:
+                    log.info("redeem: proxy factory gas=%d (too low) — trying direct",
+                             estimated)
+            except Exception as exc:
+                log.info("redeem: proxy factory gas est failed: %s — trying direct", exc)
+
+            # ── Approach 2: Direct EOA call (fallback) ──
+            # In case tokens are at EOA (e.g., manual transfers)
+            direct_tx_data = "0x" + inner_calldata.hex()
+            # Also try both contract types for direct calls
+            direct_attempts = [
+                (target_contract, direct_tx_data, "primary"),
+            ]
+            # Add the other contract type as fallback
+            if neg_risk:
+                ctf_selector = bytes.fromhex("01b7037c")
+                ctf_params = eth_abi.encode(
+                    ["address", "bytes32", "bytes32", "uint256[]"],
+                    [self.USDC_E, b'\x00' * 32, cond_bytes, [1, 2]]
+                )
+                direct_attempts.append(
+                    (self.CTF_CONTRACT, "0x" + (ctf_selector + ctf_params).hex(), "CTF-fallback")
+                )
+            else:
+                nr_selector = bytes.fromhex("dbeccb23")
+                nr_params = eth_abi.encode(
+                    ["bytes32", "uint256[]"],
+                    [cond_bytes, [1, 2]]
+                )
+                direct_attempts.append(
+                    (self.NEG_RISK_ADAPTER, "0x" + (nr_selector + nr_params).hex(), "NegRisk-fallback")
+                )
+
+            for contract, tx_data, label in direct_attempts:
                 log.info("redeem: trying %s direct (contract=%s)",
-                         label, target_contract[:10])
+                         label, contract[:10])
                 try:
                     est_hex = await self._rpc(session, "eth_estimateGas", [{
                         "from": acct.address,
-                        "to": target_contract,
-                        "data": direct_tx_data,
+                        "to": contract,
+                        "data": tx_data,
                     }])
                     estimated = int(est_hex, 16)
                     if estimated < 30_000:
@@ -635,7 +696,7 @@ class Executor:
                         session, "eth_gasPrice", []
                     ), 16)
                     tx_hash = await self._sign_and_send(
-                        session, acct, target_contract, direct_tx_data,
+                        session, acct, contract, tx_data,
                         nonce, gas_price, gas=gas_limit,
                     )
                     if tx_hash:
@@ -734,14 +795,16 @@ class Executor:
 
     async def verify_token_balance(self, token_id: str) -> float:
         """
-        Check on-chain CTF balance for a token at the EOA.
-        Returns the balance in USDC-equivalent (raw / 1e6).
+        Check on-chain CTF balance for a token at BOTH EOA and proxy wallet.
+        Returns the total balance in USDC-equivalent (raw / 1e6).
+
+        Polymarket holds conditional tokens at the proxy wallet (not EOA),
+        so we must check both locations.
         """
         import aiohttp
         from eth_account import Account
 
         acct = Account.from_key(config.POLYGON_PRIVATE_KEY)
-        addr_padded = acct.address.lower().replace("0x", "").rjust(64, "0")
 
         try:
             token_int = int(token_id)
@@ -750,19 +813,38 @@ class Executor:
             log.warning("verify_token_balance: invalid token_id %s", token_id[:20])
             return 0.0
 
-        # balanceOf(address, uint256) selector = 0x00fdd58e
-        call_data = "0x00fdd58e" + addr_padded + token_hex
-
+        total_raw = 0
         try:
             async with aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=10)
+                timeout=aiohttp.ClientTimeout(total=15)
             ) as session:
+                # Check EOA balance
+                eoa_padded = acct.address.lower().replace("0x", "").rjust(64, "0")
+                call_data = "0x00fdd58e" + eoa_padded + token_hex
                 result = await self._rpc(session, "eth_call", [
                     {"to": self.CTF_CONTRACT, "data": call_data}, "latest"
                 ])
                 if result and result != "0x":
-                    raw = int(result, 16)
-                    return raw / 1e6  # Polymarket uses 1e6 decimals
+                    total_raw += int(result, 16)
+
+                # Check proxy wallet balance
+                proxy_addr = await self.get_proxy_wallet_address(session)
+                if proxy_addr:
+                    proxy_padded = proxy_addr.lower().replace("0x", "").rjust(64, "0")
+                    call_data_proxy = "0x00fdd58e" + proxy_padded + token_hex
+                    result_proxy = await self._rpc(session, "eth_call", [
+                        {"to": self.CTF_CONTRACT, "data": call_data_proxy}, "latest"
+                    ])
+                    if result_proxy and result_proxy != "0x":
+                        proxy_raw = int(result_proxy, 16)
+                        total_raw += proxy_raw
+                        if proxy_raw > 0:
+                            log.info("verify_token_balance: found %d raw at PROXY %s",
+                                     proxy_raw, proxy_addr[:10])
+
+                if total_raw > 0:
+                    log.info("verify_token_balance: total=%d raw (EOA+proxy)", total_raw)
+                return total_raw / 1e6  # Polymarket uses 1e6 decimals
         except Exception as exc:
             log.warning("verify_token_balance failed: %s", exc)
 
@@ -789,3 +871,130 @@ class Executor:
             log.warning("balance query failed: %s", exc)
             return None
         return None
+
+    async def get_onchain_usdc_balance(self, address: str) -> float:
+        """Get USDC.e balance for any address via raw RPC."""
+        import aiohttp
+        addr_padded = address.lower().replace("0x", "").rjust(64, "0")
+        data = "0x70a08231" + "0" * 24 + addr_padded[-40:]
+        try:
+            async with aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=15)
+            ) as session:
+                result = await self._rpc(session, "eth_call", [
+                    {"to": self.USDC_E, "data": data}, "latest"
+                ])
+                return int(result, 16) / 1e6 if result and result != "0x" else 0.0
+        except Exception as exc:
+            log.warning("get_onchain_usdc_balance(%s) failed: %s", address[:10], exc)
+            return 0.0
+
+    async def cancel_all_open_orders(self) -> int:
+        """Cancel all open CLOB orders to free locked USDC.e."""
+        client = self._init_client()
+        if client is None:
+            return 0
+        try:
+            def _cancel():
+                return client.cancel_all()
+            resp = await asyncio.to_thread(_cancel)
+            if resp:
+                log.info("cancel_all_orders: %s", resp)
+                return 1
+            return 0
+        except Exception as exc:
+            log.warning("cancel_all_orders failed: %s", exc)
+            return 0
+
+    async def get_open_orders(self) -> list:
+        """Get list of open orders from CLOB."""
+        client = self._init_client()
+        if client is None:
+            return []
+        try:
+            def _get():
+                return client.get_orders()
+            orders = await asyncio.to_thread(_get)
+            if orders:
+                return [o for o in orders
+                        if isinstance(o, dict)
+                        and o.get("status") in ("live", "open")]
+            return []
+        except Exception as exc:
+            log.warning("get_open_orders failed: %s", exc)
+            return []
+
+    async def full_balance_recovery(self) -> dict:
+        """
+        Comprehensive balance recovery: check all locations where USDC.e
+        could be stuck and attempt to recover it.
+
+        Returns dict with amounts found at each location.
+        """
+        import aiohttp
+        from eth_account import Account
+
+        acct = Account.from_key(config.POLYGON_PRIVATE_KEY)
+        result = {
+            "eoa_balance": 0.0,
+            "proxy_balance": 0.0,
+            "clob_balance": 0.0,
+            "open_orders": 0,
+            "recovered": 0.0,
+            "actions": [],
+        }
+
+        try:
+            # 1. Check EOA balance
+            eoa_bal = await self.get_onchain_usdc_balance(acct.address)
+            result["eoa_balance"] = eoa_bal
+
+            # 2. Check proxy wallet balance
+            async with aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=15)
+            ) as session:
+                proxy_addr = await self.get_proxy_wallet_address(session)
+            if proxy_addr:
+                proxy_bal = await self.get_onchain_usdc_balance(proxy_addr)
+                result["proxy_balance"] = proxy_bal
+                if proxy_bal > 0.01:
+                    log.info("recovery: proxy has $%.2f — withdrawing", proxy_bal)
+                    tx = await self.withdraw_proxy_usdc()
+                    if tx:
+                        result["recovered"] += proxy_bal
+                        result["actions"].append(
+                            f"Withdrew ${proxy_bal:.2f} from proxy: {tx}")
+
+            # 3. Check CLOB exchange balance
+            clob_bal = await self.get_balance_usdc()
+            if clob_bal is not None:
+                result["clob_balance"] = clob_bal
+
+            # 4. Cancel open orders (free locked USDC)
+            open_orders = await self.get_open_orders()
+            result["open_orders"] = len(open_orders)
+            if open_orders:
+                log.info("recovery: %d open orders — canceling", len(open_orders))
+                await self.cancel_all_open_orders()
+                result["actions"].append(
+                    f"Canceled {len(open_orders)} open orders")
+                # Wait and check if proxy balance increased
+                await asyncio.sleep(3)
+                if proxy_addr:
+                    proxy_bal2 = await self.get_onchain_usdc_balance(proxy_addr)
+                    if proxy_bal2 > 0.01:
+                        tx = await self.withdraw_proxy_usdc()
+                        if tx:
+                            result["recovered"] += proxy_bal2
+                            result["actions"].append(
+                                f"Post-cancel proxy withdraw: ${proxy_bal2:.2f}")
+
+            # 5. Final EOA balance
+            result["eoa_balance"] = await self.get_onchain_usdc_balance(
+                acct.address)
+
+        except Exception as exc:
+            log.exception("full_balance_recovery failed: %s", exc)
+            result["actions"].append(f"Error: {exc}")
+
+        return result
