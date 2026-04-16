@@ -244,12 +244,13 @@ class Executor:
         return data.get("result")
 
     async def _sign_and_send(self, session, acct, to: str, data: str,
-                              nonce: int, gas_price: int) -> Optional[str]:
+                              nonce: int, gas_price: int,
+                              gas: int = 100_000) -> Optional[str]:
         """Sign and broadcast a transaction, return tx hash or None."""
         tx = {
             "to": bytes.fromhex(to.replace("0x", "")),
             "value": 0,
-            "gas": 100_000,
+            "gas": gas,
             "gasPrice": gas_price,
             "nonce": nonce,
             "chainId": 137,
@@ -524,7 +525,7 @@ class Executor:
         parent_collection = "0" * 64  # bytes32(0)
         cond_padded = condition_id.lower().replace("0x", "").rjust(64, "0")
         # offset to dynamic array (4 params × 32 bytes = 128 = 0x80)
-        array_offset = "0" * 63 + "80"  # hex 128
+        array_offset = "0" * 62 + "80"  # hex 128 = 64 hex chars
         # array length = 2
         array_len = "0" * 63 + "2"
         # indexSet[0] = 1 (first outcome), indexSet[1] = 2 (second outcome)
@@ -534,24 +535,46 @@ class Executor:
         tx_data = "0x" + selector + usdc_e_padded + parent_collection + cond_padded + \
                   array_offset + array_len + idx_0 + idx_1
 
+        log.info("redeem: condition_id=%s selector=%s data_len=%d",
+                 condition_id[:16], selector, len(tx_data))
+
         async with aiohttp.ClientSession(
-            timeout=aiohttp.ClientTimeout(total=30)
+            timeout=aiohttp.ClientTimeout(total=60)
         ) as session:
             try:
+                # Estimate gas first via eth_estimateGas, fallback to 300k
+                gas_limit = 300_000
+                try:
+                    est_hex = await self._rpc(session, "eth_estimateGas", [{
+                        "from": acct.address,
+                        "to": self.CTF_CONTRACT,
+                        "data": tx_data,
+                    }])
+                    estimated = int(est_hex, 16)
+                    gas_limit = int(estimated * 1.5)  # 50% buffer
+                    log.info("redeem: estimated gas=%d, using %d", estimated, gas_limit)
+                except Exception as est_exc:
+                    log.warning("redeem: gas estimate failed (%s), using %d", est_exc, gas_limit)
+
                 nonce = int(await self._rpc(session, "eth_getTransactionCount",
                                             [acct.address, "latest"]), 16)
                 gas_price_hex = await self._rpc(session, "eth_gasPrice", [])
                 gas_price = int(gas_price_hex, 16)
 
                 tx_hash = await self._sign_and_send(
-                    session, acct, self.CTF_CONTRACT, tx_data, nonce, gas_price
+                    session, acct, self.CTF_CONTRACT, tx_data, nonce, gas_price,
+                    gas=gas_limit,
                 )
                 if tx_hash:
                     ok = await self._wait_receipt(session, tx_hash)
                     log.info("redeem tx=%s ok=%s", tx_hash, ok)
+                    if not ok:
+                        log.error("redeem TX reverted: %s", tx_hash)
                     return tx_hash if ok else None
+                else:
+                    log.error("redeem: sign_and_send returned None")
             except Exception as exc:
-                log.warning("redeem failed: %s", exc)
+                log.exception("redeem failed: %s", exc)
         return None
 
     async def get_balance_usdc(self) -> Optional[float]:

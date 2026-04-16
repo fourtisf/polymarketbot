@@ -410,8 +410,7 @@ class TradingBot:
         # Fetch live on-chain balance for transparency
         bal_str = ""
         try:
-            from utils.telegram import fetch_balances
-            usdc_bal, _ = await fetch_balances(config.POLYGON_PUBLIC_KEY)
+            usdc_bal, _, _ = await fetch_all_usdc(config.POLYGON_PUBLIC_KEY)
             bal_str = f"\n💵 USDC.e balance: <b>${usdc_bal:,.2f}</b>"
         except Exception:
             pass
@@ -498,8 +497,7 @@ class TradingBot:
         # Fetch live on-chain balance for transparency
         onchain_bal = ""
         try:
-            from utils.telegram import fetch_balances
-            usdc_bal, _ = await fetch_balances(config.POLYGON_PUBLIC_KEY)
+            usdc_bal, _, _ = await fetch_all_usdc(config.POLYGON_PUBLIC_KEY)
             onchain_bal = f"\n💵 USDC.e on-chain: <b>${usdc_bal:,.2f}</b>"
         except Exception:
             pass
@@ -544,8 +542,16 @@ class TradingBot:
         self.dashboard.broadcast("stats", {"pnl": pnl})
 
         # Auto-redeem winning conditional tokens back to USDC.e
+        log.info("redeem check: win=%s condition_id=%s dry_run=%s",
+                 win, w.condition_id[:16] if w.condition_id else "EMPTY", self.dry_run)
         if win and w.condition_id and not self.dry_run:
             asyncio.create_task(self._auto_redeem(w.condition_id))
+        elif win and not w.condition_id:
+            log.error("WIN but no condition_id — cannot auto-redeem! slug=%s", w.slug)
+            await self.notifier.send_text(
+                "⚠️ Won but cannot auto-redeem: no conditionId from Gamma API.\n"
+                "Manual redeem may be needed."
+            )
 
         # Check auto-pause conditions
         allowed, why = self.risk.can_trade()
@@ -572,8 +578,7 @@ class TradingBot:
                     # Fetch new balance after redeem
                     bal_str = ""
                     try:
-                        from utils.telegram import fetch_balances
-                        usdc_bal, _ = await fetch_balances(config.POLYGON_PUBLIC_KEY)
+                        usdc_bal, _, _ = await fetch_all_usdc(config.POLYGON_PUBLIC_KEY)
                         bal_str = f"\n💵 USDC.e: <b>${usdc_bal:,.2f}</b>"
                     except Exception:
                         pass
@@ -587,6 +592,11 @@ class TradingBot:
             except Exception as exc:
                 log.warning("redeem attempt %d failed: %s", attempt + 1, exc)
         log.warning("auto-redeem failed after 3 attempts for condition %s", condition_id[:16])
+        await self.notifier.send_text(
+            f"⚠️ Auto-redeem failed after 3 attempts.\n"
+            f"Condition: <code>{condition_id[:20]}</code>\n"
+            f"You may need to redeem manually on polymarket.com"
+        )
 
 
 # ─────────────────────────────────────────────────────────────
