@@ -381,7 +381,10 @@ class TradingBot:
             log.warning("entry not filled: %s", fill.error)
             self.state.entered_this_window = True  # prevent retry spam
             await self.notifier.send_text(
-                f"⚠️ Entry not filled on {w.slug}\nReason: {fill.error or 'no fill'}"
+                f"⚠️ <b>ENTRY FAILED</b> — {window_label_from_slug(w.slug)}\n"
+                f"Side: {decision.action} | Price: ${best_ask:.3f}\n"
+                f"Reason: {fill.error or 'no fill'}\n"
+                f"Order ID: <code>{fill.order_id[:20] if fill.order_id else 'none'}</code>"
             )
             await self._log_skip(None, {"skip_reason": f"not_filled:{fill.error}", "decision": decision.reason_log})
             return
@@ -404,25 +407,30 @@ class TradingBot:
         self.state.entry_record = record
         self.trade_log.log_trade({**record, "phase": "entry"})
 
+        # Fetch live on-chain balance for transparency
+        bal_str = ""
+        try:
+            from utils.telegram import fetch_balances
+            usdc_bal, _ = await fetch_balances(config.POLYGON_PUBLIC_KEY)
+            bal_str = f"\n💵 USDC.e balance: <b>${usdc_bal:,.2f}</b>"
+        except Exception:
+            pass
+
         rl = decision.reason_log or {}
         today = self.pnl.today_stats()
         sess = self.risk.state.session_pnl
         market_lnk = market_link_html(w.slug)
-        wallet_lnk = wallet_link_html(config.POLYGON_PUBLIC_KEY or "")
         tx_lnk = tx_link_html(fill.tx_hash) if fill.tx_hash else ""
-        link_parts = [p for p in (market_lnk, wallet_lnk, tx_lnk) if p]
-        links_line = " · ".join(link_parts) if link_parts else ""
-        order_line = ""
-        if not fill.tx_hash and fill.order_id and not self.dry_run:
-            order_line = f"Order: <code>{fill.order_id[:16]}</code>\n"
+        order_id_str = f"\nOrder: <code>{fill.order_id[:20]}</code>" if fill.order_id else ""
+        tx_str = f"\nTX: {tx_lnk}" if tx_lnk else ""
         await self.notifier.send_text(
             f"🟢 <b>ENTRY</b> — {window_label_from_slug(w.slug)}\n"
             f"BUY {record['side']} × {fill.filled_shares:.0f} @ ${fill.avg_price:.3f}\n"
-            f"Cost: ${record['cost']:.2f} | Score: {decision.confidence}/100\n"
+            f"Cost: <b>${record['cost']:.2f}</b> | Score: {decision.confidence}/100\n"
             f"Δ {rl.get('delta_pct', 0):+.3f}% | ⏱ {rl.get('seconds_remaining', '?')}s | "
-            f"Trend: {rl.get('delta_trend', '?')}\n"
-            f"{order_line}"
-            f"🔗 {links_line}\n"
+            f"Trend: {rl.get('delta_trend', '?')}"
+            f"{order_id_str}{tx_str}{bal_str}\n"
+            f"🔗 {market_lnk}\n"
             f"Session: {sess:+.2f} ({today.get('wins', 0)}W/{today.get('losses', 0)}L)"
         )
         self.dashboard.broadcast("trade", record)
@@ -487,32 +495,49 @@ class TradingBot:
         self.risk.record_trade(pnl)
         self.trade_log.log_trade({**rec_final, "phase": "settled"})
 
+        # Fetch live on-chain balance for transparency
+        onchain_bal = ""
+        try:
+            from utils.telegram import fetch_balances
+            usdc_bal, _ = await fetch_balances(config.POLYGON_PUBLIC_KEY)
+            onchain_bal = f"\n💵 USDC.e on-chain: <b>${usdc_bal:,.2f}</b>"
+        except Exception:
+            pass
+
         # Notification
         today = self.pnl.today_stats()
         alltime = self.pnl.alltime_stats()
         delta_close = (close_price - w.price_to_beat) / w.price_to_beat * 100
         market_lnk = market_link_html(w.slug)
+        tx_lnk = tx_link_html(rec.get("tx_hash", "")) if rec.get("tx_hash") else ""
         wins_today = today.get("wins", 0)
         losses_today = today.get("losses", 0)
         wr = today.get("win_rate", 0)
         bal = alltime["current_balance"]
+        tx_line = f"\nTX: {tx_lnk}" if tx_lnk else ""
         if win:
             text = (
                 f"🏆 <b>WIN</b> +${pnl:.2f}\n"
                 f"BTC: ${w.price_to_beat:,.2f} → ${close_price:,.2f} "
                 f"({delta_close:+.3f}%) = {w.resolution} ✅\n"
+                f"Entry: {side} × {shares:.0f} @ ${entry:.3f} = ${rec['cost']:.2f}"
+                f"{tx_line}\n"
                 f"🔗 {market_lnk}\n"
                 f"Today: {today['pnl']:+.2f} "
-                f"({wins_today}W/{losses_today}L) {wr}% | Balance: ${bal:.2f}"
+                f"({wins_today}W/{losses_today}L) {wr}% | Bot balance: ${bal:.2f}"
+                f"{onchain_bal}"
             )
         else:
             text = (
                 f"❌ <b>LOSS</b> -${abs(pnl):.2f}\n"
                 f"BTC: ${w.price_to_beat:,.2f} → ${close_price:,.2f} "
                 f"({delta_close:+.3f}%) = {w.resolution}\n"
+                f"Entry: {side} × {shares:.0f} @ ${entry:.3f} = ${rec['cost']:.2f}"
+                f"{tx_line}\n"
                 f"🔗 {market_lnk}\n"
                 f"Today: {today['pnl']:+.2f} "
-                f"({wins_today}W/{losses_today}L) {wr}% | Balance: ${bal:.2f}"
+                f"({wins_today}W/{losses_today}L) {wr}% | Bot balance: ${bal:.2f}"
+                f"{onchain_bal}"
             )
         await self.notifier.send_text(text)
         self.dashboard.broadcast("trade", rec_final)
