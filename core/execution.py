@@ -589,7 +589,16 @@ class Executor:
                     log.info("redeem: %s gas estimate=%d, using %d",
                              label, estimated, gas_limit)
                 except Exception as est_exc:
-                    log.info("redeem: %s gas estimate failed: %s", label, est_exc)
+                    err_msg = str(est_exc)
+                    # Extract revert reason from RPC error if available
+                    if "message" in err_msg:
+                        try:
+                            import json as _json
+                            err_data = _json.loads(err_msg.split("RPC ", 1)[-1])
+                            err_msg = err_data.get("message", err_msg)
+                        except Exception:
+                            pass
+                    log.info("redeem: %s gas estimate failed: %s", label, err_msg)
                     continue  # Try next approach
 
                 # Gas estimation passed with meaningful gas — proceed with TX

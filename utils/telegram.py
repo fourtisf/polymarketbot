@@ -1205,7 +1205,9 @@ class CommandBot:
         redeemed = 0
         failed = 0
         skipped = 0
+        no_gamma = 0
         results_lines: list = []
+        diag_lines: list = []  # diagnostic details
 
         for win in wins:
             slug = win["window_slug"]
@@ -1216,7 +1218,9 @@ class CommandBot:
             # Look up conditionId + neg_risk via Gamma API
             info = await self._gamma_market_info(slug)
             if not info or not info.get("condition_id"):
-                skipped += 1
+                no_gamma += 1
+                if len(diag_lines) < 3:
+                    diag_lines.append(f"⚪ {slug}: no conditionId from Gamma")
                 continue
             cond_id = info["condition_id"]
             neg_risk = info.get("neg_risk", True)
@@ -1227,16 +1231,17 @@ class CommandBot:
             # Update status
             if status_msg_id:
                 try:
-                    nr_tag = " (NegRisk)" if neg_risk else ""
+                    nr_tag = " (NR)" if neg_risk else ""
                     await self.notifier.edit_text(
                         chat_id, status_msg_id,
                         f"🔄 Redeeming <b>{slug}</b>{nr_tag}...\n"
+                        f"cond: <code>{cond_id[:16]}...</code>\n"
                         f"({redeemed} done, {len(seen_slugs)}/{len(wins)} checked)"
                     )
                 except Exception:
                     pass
 
-            # Try to redeem
+            # Try to redeem with detailed error capture
             try:
                 tx_hash = await self.executor.redeem_positions(
                     cond_id, neg_risk=neg_risk
@@ -1248,10 +1253,18 @@ class CommandBot:
                         f"{tx_link_html(tx_hash)}"
                     )
                 else:
-                    skipped += 1  # nothing to redeem (already redeemed or not resolved)
+                    skipped += 1
+                    if len(diag_lines) < 3:
+                        diag_lines.append(
+                            f"⚪ {window_label_from_slug(slug)}: "
+                            f"gas est failed (NR={neg_risk})\n"
+                            f"   cond: <code>{cond_id[:20]}</code>"
+                        )
             except Exception as exc:
                 failed += 1
-                results_lines.append(f"❌ {window_label_from_slug(slug)} — {exc}")
+                results_lines.append(
+                    f"❌ {window_label_from_slug(slug)} — {str(exc)[:60]}"
+                )
 
         # Get balance after
         try:
@@ -1260,17 +1273,23 @@ class CommandBot:
             bal_after = 0.0
 
         gained = bal_after - bal_before
-        results_text = "\n".join(results_lines) if results_lines else "None"
+        results_text = "\n".join(results_lines) if results_lines else ""
 
         text = (
             f"💰 <b>REDEEM COMPLETE</b>\n"
             f"{BAR}\n"
-            f"Winning trades found: {len(seen_slugs)}\n"
+            f"Winning trades: {len(seen_slugs)}\n"
             f"Redeemed: <b>{redeemed}</b> ✅\n"
-            f"Already claimed / not resolved: {skipped}\n"
-            f"Failed: {failed}\n"
-            f"{BAR}\n"
-            f"{results_text}\n"
+            f"Gas est. failed: {skipped}\n"
+            f"No conditionId: {no_gamma}\n"
+            f"Errors: {failed}\n"
+        )
+        if results_text:
+            text += f"{BAR}\n{results_text}\n"
+        if diag_lines:
+            text += f"{BAR}\n<b>Diagnostics (first 3):</b>\n"
+            text += "\n".join(diag_lines) + "\n"
+        text += (
             f"{BAR}\n"
             f"USDC.e before: ${bal_before:.2f}\n"
             f"USDC.e after:  <b>${bal_after:.2f}</b>\n"
@@ -1289,7 +1308,7 @@ class CommandBot:
 
     @staticmethod
     async def _gamma_market_info(slug: str) -> Optional[Dict[str, Any]]:
-        """Look up conditionId and neg_risk from Gamma API by market slug."""
+        """Look up conditionId, neg_risk, and token IDs from Gamma API."""
         url = f"{config.GAMMA_HOST}/markets"
         params = {"slug": slug}
         try:
@@ -1298,16 +1317,28 @@ class CommandBot:
             ) as s:
                 async with s.get(url, params=params) as resp:
                     if resp.status != 200:
+                        log.debug("gamma %s: status %s", slug, resp.status)
                         return None
                     data = await resp.json()
             markets = data if isinstance(data, list) else data.get("data", [])
             if not markets:
+                log.debug("gamma %s: empty response", slug)
                 return None
             m = markets[0]
             cond = m.get("conditionId") or m.get("condition_id") or ""
             neg_risk = bool(m.get("negRisk") or m.get("neg_risk"))
-            return {"condition_id": cond, "neg_risk": neg_risk}
-        except Exception:
+            resolved = m.get("resolved") or m.get("is_resolved")
+            # Log full market data for first call (debug)
+            log.info("gamma %s: conditionId=%s negRisk=%s resolved=%s keys=%s",
+                     slug, cond[:16] if cond else "NONE", neg_risk, resolved,
+                     list(m.keys())[:10])
+            return {
+                "condition_id": cond,
+                "neg_risk": neg_risk,
+                "resolved": resolved,
+            }
+        except Exception as exc:
+            log.warning("gamma lookup failed for %s: %s", slug, exc)
             return None
 
     async def _cmd_help(self, args, chat_id):
