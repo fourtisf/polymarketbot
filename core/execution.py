@@ -99,12 +99,36 @@ class Executor:
         return self._client
 
     # ── Approvals ────────────────────────────────────────────
+
+    # Polymarket exchange contracts that need USDC.e spending approval
+    USDC_E = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
+    CTF_CONTRACT = "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045"
+    EXCHANGE_SPENDERS = [
+        "0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E",  # CTF Exchange
+        "0xC5d563A36AE78145C45a50134d48A1215220f80a",  # NegRisk CTF Exchange
+        "0xd91E80cF2E7be2e162c6513ceD06f1dD0dA35296",  # NegRisk Adapter
+    ]
+    MAX_UINT256 = 2**256 - 1
+
+    ERC20_ABI = [
+        {"inputs": [{"name": "spender", "type": "address"}, {"name": "amount", "type": "uint256"}],
+         "name": "approve", "outputs": [{"name": "", "type": "bool"}], "type": "function"},
+        {"inputs": [{"name": "owner", "type": "address"}, {"name": "spender", "type": "address"}],
+         "name": "allowance", "outputs": [{"name": "", "type": "uint256"}], "type": "function"},
+    ]
+
+    CTF_ABI = [
+        {"inputs": [{"name": "operator", "type": "address"}, {"name": "approved", "type": "bool"}],
+         "name": "setApprovalForAll", "outputs": [], "type": "function"},
+        {"inputs": [{"name": "owner", "type": "address"}, {"name": "operator", "type": "address"}],
+         "name": "isApprovedForAll", "outputs": [{"name": "", "type": "bool"}], "type": "function"},
+    ]
+
     async def ensure_approvals(self) -> bool:
         """
-        On LIVE startup, ensure USDC (COLLATERAL) and CTF (CONDITIONAL)
-        allowances are set for the Polymarket Exchange. Uses
-        py-clob-client's update_balance_allowance which triggers on-chain
-        approvals for EOA wallets.
+        Ensure USDC.e and CTF allowances are set for Polymarket exchange
+        contracts. First tries py-clob-client SDK, then falls back to
+        direct on-chain web3 approval transactions.
         """
         if self.dry_run:
             log.info("dry-run: skipping Polymarket approvals")
@@ -114,52 +138,101 @@ class Executor:
             log.error("approvals: CLOB client unavailable")
             return False
 
+        # 1. Try py-clob-client SDK method first
         try:
             from py_clob_client.clob_types import BalanceAllowanceParams, AssetType
-        except ImportError:
-            log.error("approvals: BalanceAllowanceParams import failed")
-            return False
 
-        def _check_and_set():
-            results = {}
-            # 1. USDC collateral allowance
-            col_params = BalanceAllowanceParams(asset_type=AssetType.COLLATERAL)
-            bal = client.get_balance_allowance(col_params)
-            log.info("approvals: USDC balance/allowance = %s", bal)
-            allowance = 0.0
-            if isinstance(bal, dict):
-                try:
-                    allowance = float(bal.get("allowance", 0) or 0)
-                except (TypeError, ValueError):
-                    allowance = 0.0
-            if allowance <= 0:
-                log.info("approvals: updating USDC allowance...")
+            def _sdk_approve():
+                col_params = BalanceAllowanceParams(asset_type=AssetType.COLLATERAL)
+                bal = client.get_balance_allowance(col_params)
+                log.info("approvals: CLOB balance/allowance = %s", bal)
                 client.update_balance_allowance(col_params)
-                results["usdc"] = "updated"
-            else:
-                results["usdc"] = f"ok ({allowance})"
-
-            # 2. CTF conditional allowance — approve once for proxy,
-            # for EOA we need to pass a token_id but the on-chain approval
-            # is per-operator (CTF.setApprovalForAll), so any token works.
-            cond_params = BalanceAllowanceParams(
-                asset_type=AssetType.CONDITIONAL,
-                token_id="0",
-            )
-            try:
+                cond_params = BalanceAllowanceParams(
+                    asset_type=AssetType.CONDITIONAL, token_id="0",
+                )
                 client.update_balance_allowance(cond_params)
-                results["ctf"] = "updated"
-            except Exception as exc:
-                results["ctf"] = f"err:{exc}"
-            return results
 
+            await asyncio.to_thread(_sdk_approve)
+            log.info("approvals: SDK update_balance_allowance called")
+        except Exception as exc:
+            log.warning("approvals: SDK method failed: %s — trying direct web3", exc)
+
+        # 2. Verify on-chain + direct web3 fallback
         try:
-            results = await asyncio.to_thread(_check_and_set)
-            log.info("approvals complete: %s", results)
+            results = await asyncio.to_thread(self._direct_web3_approvals)
+            log.info("approvals verified: %s", results)
             return True
         except Exception as exc:
-            log.exception("approvals failed: %s", exc)
+            log.exception("approvals: direct web3 failed: %s", exc)
             return False
+
+    def _direct_web3_approvals(self) -> dict:
+        """Send ERC-20 approve() and CTF setApprovalForAll() on-chain."""
+        from web3 import Web3
+
+        w3 = Web3(Web3.HTTPProvider("https://polygon-bor-rpc.publicnode.com"))
+        if not w3.is_connected():
+            raise RuntimeError("cannot connect to Polygon RPC")
+
+        acct = w3.eth.account.from_key(config.POLYGON_PRIVATE_KEY)
+        usdc = w3.eth.contract(
+            address=Web3.to_checksum_address(self.USDC_E), abi=self.ERC20_ABI
+        )
+        ctf = w3.eth.contract(
+            address=Web3.to_checksum_address(self.CTF_CONTRACT), abi=self.CTF_ABI
+        )
+        nonce = w3.eth.get_transaction_count(acct.address)
+        results = {}
+
+        # Approve USDC.e for each exchange spender
+        for spender in self.EXCHANGE_SPENDERS:
+            spender_cs = Web3.to_checksum_address(spender)
+            current = usdc.functions.allowance(acct.address, spender_cs).call()
+            label = spender[:10]
+            if current > 10**12:  # already approved (> $1M)
+                log.info("USDC.e allowance for %s already OK: %d", label, current)
+                results[f"usdc_{label}"] = "ok"
+                continue
+            log.info("USDC.e allowance for %s is %d — approving max...", label, current)
+            tx = usdc.functions.approve(spender_cs, self.MAX_UINT256).build_transaction({
+                "from": acct.address,
+                "nonce": nonce,
+                "gas": 100_000,
+                "gasPrice": w3.eth.gas_price,
+                "chainId": 137,
+            })
+            signed = acct.sign_transaction(tx)
+            tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
+            receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=60)
+            log.info("USDC.e approved %s: tx=%s status=%d", label, tx_hash.hex(), receipt["status"])
+            results[f"usdc_{label}"] = "approved" if receipt["status"] == 1 else "FAILED"
+            nonce += 1
+
+        # Approve CTF (conditional tokens) for each exchange operator
+        for spender in self.EXCHANGE_SPENDERS:
+            spender_cs = Web3.to_checksum_address(spender)
+            label = spender[:10]
+            is_approved = ctf.functions.isApprovedForAll(acct.address, spender_cs).call()
+            if is_approved:
+                log.info("CTF approval for %s already OK", label)
+                results[f"ctf_{label}"] = "ok"
+                continue
+            log.info("CTF not approved for %s — setting approval...", label)
+            tx = ctf.functions.setApprovalForAll(spender_cs, True).build_transaction({
+                "from": acct.address,
+                "nonce": nonce,
+                "gas": 100_000,
+                "gasPrice": w3.eth.gas_price,
+                "chainId": 137,
+            })
+            signed = acct.sign_transaction(tx)
+            tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
+            receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=60)
+            log.info("CTF approved %s: tx=%s status=%d", label, tx_hash.hex(), receipt["status"])
+            results[f"ctf_{label}"] = "approved" if receipt["status"] == 1 else "FAILED"
+            nonce += 1
+
+        return results
 
     # ── Public API ───────────────────────────────────────────
     async def place_limit_buy(
