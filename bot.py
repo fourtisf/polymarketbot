@@ -616,6 +616,7 @@ class TradingBot:
 
         The on-chain oracle may take a few seconds to report the resolution,
         so we retry up to 3 times with increasing delays.
+        After successful redeem, also withdraw any USDC.e stuck in proxy wallet.
         """
         for attempt in range(3):
             # Wait for oracle to report on-chain resolution
@@ -625,27 +626,63 @@ class TradingBot:
                     condition_id, neg_risk=neg_risk
                 )
                 if tx_hash:
-                    # Fetch new balance after redeem
+                    # After redeem, withdraw USDC.e from proxy wallet to EOA
+                    withdraw_tx = None
+                    try:
+                        await asyncio.sleep(3)  # Wait for state to settle
+                        withdraw_tx = await self.executor.withdraw_proxy_usdc()
+                        if withdraw_tx:
+                            log.info("proxy USDC.e withdrawn: tx=%s", withdraw_tx)
+                    except Exception as exc:
+                        log.warning("proxy USDC.e withdrawal failed: %s", exc)
+
+                    # Fetch new balance after redeem + withdrawal
                     bal_str = ""
                     try:
                         usdc_bal, _, _ = await fetch_all_usdc(config.POLYGON_PUBLIC_KEY)
                         bal_str = f"\n💵 USDC.e: <b>${usdc_bal:,.2f}</b>"
                     except Exception:
                         pass
+                    withdraw_line = ""
+                    if withdraw_tx:
+                        withdraw_line = f"\n💸 Proxy→EOA: {tx_link_html(withdraw_tx)}"
                     await self.notifier.send_text(
                         f"💰 <b>Tokens redeemed</b>\n"
                         f"TX: {tx_link_html(tx_hash)}"
+                        f"{withdraw_line}"
                         f"{bal_str}"
                     )
                     return
                 log.info("redeem attempt %d: no tx (oracle may not have reported yet)", attempt + 1)
             except Exception as exc:
                 log.warning("redeem attempt %d failed: %s", attempt + 1, exc)
+
+        # All redeem attempts failed — still try to withdraw proxy USDC
+        # (previous redeems by the Telegram /redeem command or website may have
+        # left USDC.e sitting in the proxy wallet)
+        try:
+            withdraw_tx = await self.executor.withdraw_proxy_usdc()
+            if withdraw_tx:
+                bal_str = ""
+                try:
+                    usdc_bal, _, _ = await fetch_all_usdc(config.POLYGON_PUBLIC_KEY)
+                    bal_str = f"\n💵 USDC.e: <b>${usdc_bal:,.2f}</b>"
+                except Exception:
+                    pass
+                await self.notifier.send_text(
+                    f"💸 <b>Proxy USDC.e withdrawn to EOA</b>\n"
+                    f"TX: {tx_link_html(withdraw_tx)}"
+                    f"{bal_str}"
+                )
+                return
+        except Exception as exc:
+            log.warning("proxy withdrawal fallback failed: %s", exc)
+
         log.warning("auto-redeem failed after 3 attempts for condition %s", condition_id[:16])
         await self.notifier.send_text(
             f"⚠️ Auto-redeem failed after 3 attempts.\n"
             f"Condition: <code>{condition_id[:20]}</code>\n"
-            f"You may need to redeem manually on polymarket.com"
+            f"Try /redeem or run: python3 scripts/redeem_all.py"
         )
 
 
