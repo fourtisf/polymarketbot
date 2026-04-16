@@ -4,6 +4,8 @@ Polymarket CLOB WebSocket feed for token prices + orderbook.
 Subscribes to the 'market' channel for the current window's token IDs
 and keeps a live snapshot of best bid / best ask / last trade for each
 token. Consumers call get_best_bid/ask() for order pricing.
+
+Falls back to REST API polling when WebSocket is unavailable (proxy/geo-block).
 """
 
 import asyncio
@@ -11,13 +13,16 @@ import logging
 import time
 from typing import Dict, List, Optional
 
+import aiohttp
+
 from core.websockets import AsyncReconnectingWS
 import config
 
 log = logging.getLogger("polymarket")
 
-
 MAX_STALENESS_SEC = 30  # prices older than this are considered stale
+REST_POLL_INTERVAL = 3  # seconds
+CLOB_BOOK_URL = "https://clob.polymarket.com/book"
 
 
 class TokenBook:
@@ -39,6 +44,16 @@ class PolymarketFeed(AsyncReconnectingWS):
         super().__init__(config.POLYMARKET_WS, name="polymarket")
         self.tokens: Dict[str, TokenBook] = {}
         self._subscribed_ids: List[str] = []
+        self._rest_task: Optional[asyncio.Task] = None
+
+    async def run(self) -> None:
+        self._rest_task = asyncio.create_task(self._rest_poll_loop())
+        await super().run()
+
+    async def stop(self) -> None:
+        if self._rest_task:
+            self._rest_task.cancel()
+        await super().stop()
 
     async def set_tokens(self, token_ids: List[str]) -> None:
         """Swap tracked token IDs. Triggers a re-subscribe."""
@@ -90,6 +105,52 @@ class PolymarketFeed(AsyncReconnectingWS):
                     book.last_trade = float(item.get("price"))
                 except (KeyError, ValueError, TypeError):
                     pass
+
+    async def _rest_poll_loop(self) -> None:
+        """Fallback: poll CLOB REST API for order book when WS is unavailable."""
+        logged_fallback = False
+        while True:
+            try:
+                if self._ws is not None:
+                    logged_fallback = False
+                    await asyncio.sleep(5)
+                    continue
+
+                if not self._subscribed_ids:
+                    await asyncio.sleep(2)
+                    continue
+
+                if not logged_fallback:
+                    log.info("polymarket WS unavailable — using REST API fallback")
+                    logged_fallback = True
+
+                async with aiohttp.ClientSession(
+                    timeout=aiohttp.ClientTimeout(total=5)
+                ) as session:
+                    for token_id in self._subscribed_ids:
+                        try:
+                            url = f"{CLOB_BOOK_URL}?token_id={token_id}"
+                            async with session.get(url) as resp:
+                                data = await resp.json()
+                                book = self.tokens.setdefault(token_id, TokenBook())
+                                book.ts = time.time()
+                                bids = data.get("bids") or []
+                                asks = data.get("asks") or []
+                                if bids:
+                                    book.best_bid = max(
+                                        float(b["price"]) for b in bids
+                                    )
+                                if asks:
+                                    book.best_ask = min(
+                                        float(a["price"]) for a in asks
+                                    )
+                        except Exception as exc:
+                            log.debug("REST book poll %s: %s", token_id[:10], exc)
+            except asyncio.CancelledError:
+                return
+            except Exception as exc:
+                log.debug("polymarket REST poll failed: %s", exc)
+            await asyncio.sleep(REST_POLL_INTERVAL)
 
     # ── Public API ───────────────────────────────────────────
     def get_best_bid(self, token_id: str) -> Optional[float]:

@@ -10,6 +10,8 @@ Subscribes to btcusdt@trade and maintains:
 Consumers ask binance.get_delta(price_to_beat) to get the current %-delta
 vs the window's price-to-beat, and binance.classify_volume() for the
 volume tag used in strategy scoring.
+
+Falls back to REST API polling when WebSocket is unavailable (proxy/geo-block).
 """
 
 import asyncio
@@ -19,10 +21,15 @@ import time
 from collections import deque
 from typing import Deque, Dict, Optional, Tuple
 
+import aiohttp
+
 from core.websockets import AsyncReconnectingWS
 import config
 
 log = logging.getLogger("binance")
+
+BINANCE_REST_URL = "https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT"
+REST_POLL_INTERVAL = 2  # seconds
 
 
 class BinanceFeed(AsyncReconnectingWS):
@@ -37,8 +44,17 @@ class BinanceFeed(AsyncReconnectingWS):
         # Baseline volumes per minute (for "high/normal/low")
         self._historical_volumes: Deque[float] = deque(maxlen=30)
         # First price seen at/after each 300s-aligned window boundary.
-        # Used as price-to-beat fallback when Chainlink RTDS is unavailable.
         self._window_open_prices: Dict[int, float] = {}
+        self._rest_task: Optional[asyncio.Task] = None
+
+    async def run(self) -> None:
+        self._rest_task = asyncio.create_task(self._rest_poll_loop())
+        await super().run()
+
+    async def stop(self) -> None:
+        if self._rest_task:
+            self._rest_task.cancel()
+        await super().stop()
 
     async def on_message(self, msg) -> None:
         if not isinstance(msg, dict) or msg.get("e") != "trade":
@@ -49,6 +65,9 @@ class BinanceFeed(AsyncReconnectingWS):
             ts = float(msg["T"]) / 1000.0
         except (KeyError, ValueError, TypeError):
             return
+        self._update_price(price, ts, qty)
+
+    def _update_price(self, price: float, ts: float, qty: float = 0.01) -> None:
         self.last_price = price
         self.last_price_ts = ts
         self.trades_window.append((ts, price, qty))
@@ -59,6 +78,34 @@ class BinanceFeed(AsyncReconnectingWS):
         if len(self._window_open_prices) > 200:
             for k in sorted(self._window_open_prices.keys())[:100]:
                 self._window_open_prices.pop(k, None)
+
+    async def _rest_poll_loop(self) -> None:
+        """Fallback: poll Binance REST API when WebSocket is unavailable."""
+        logged_fallback = False
+        while True:
+            try:
+                # Only poll when WS is disconnected
+                if self._ws is not None:
+                    logged_fallback = False
+                    await asyncio.sleep(5)
+                    continue
+
+                if not logged_fallback:
+                    log.info("binance WS unavailable — using REST API fallback")
+                    logged_fallback = True
+
+                async with aiohttp.ClientSession(
+                    timeout=aiohttp.ClientTimeout(total=5)
+                ) as session:
+                    async with session.get(BINANCE_REST_URL) as resp:
+                        data = await resp.json()
+                        price = float(data["price"])
+                        self._update_price(price, time.time())
+            except asyncio.CancelledError:
+                return
+            except Exception as exc:
+                log.debug("binance REST poll failed: %s", exc)
+            await asyncio.sleep(REST_POLL_INTERVAL)
 
     def _trim_window(self, now: float) -> None:
         cutoff = now - config.BINANCE_VOLUME_WINDOW_SECONDS
@@ -72,7 +119,7 @@ class BinanceFeed(AsyncReconnectingWS):
     def get_price(self) -> Optional[float]:
         if self.last_price is None:
             return None
-        # Reject stale prices (> 10s old = ws dead)
+        # Reject stale prices (> 10s old = both ws and rest dead)
         if time.time() - self.last_price_ts > 10:
             return None
         return self.last_price
