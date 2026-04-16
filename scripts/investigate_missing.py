@@ -103,11 +103,14 @@ async def get_ctf_balance(session, address, token_id):
 
 
 async def get_usdc_transfers(session, address, from_block, to_block,
-                             chunk_size=100_000):
-    """Get all USDC.e transfers to/from address via eth_getLogs."""
+                             chunk_size=9_000):
+    """Get all USDC.e transfers to/from address via eth_getLogs.
+    Polygon public RPC caps block range at 10,000."""
     addr_topic = "0x" + address.lower().replace("0x", "").rjust(64, "0")
     all_logs = []
     cur = from_block
+    total_chunks = (to_block - from_block) // chunk_size + 1
+    done = 0
     while cur <= to_block:
         end = min(cur + chunk_size - 1, to_block)
         for direction, topics in [
@@ -123,14 +126,30 @@ async def get_usdc_transfers(session, address, from_block, to_block,
                     log["_direction"] = direction
                     all_logs.append(log)
             except Exception as e:
-                if "limit" in str(e).lower() or "query" in str(e).lower():
-                    # Reduce chunk size on error
+                emsg = str(e).lower()
+                if "range" in emsg or "limit" in emsg or "query" in emsg:
                     new_chunk = chunk_size // 2
-                    if new_chunk < 5000:
-                        raise
+                    if new_chunk < 500:
+                        print(f"    RPC still failing: {e}")
+                        break
                     return await get_usdc_transfers(
                         session, address, cur, to_block, new_chunk)
-                raise
+                # rate-limit or transient — wait + retry
+                await asyncio.sleep(2)
+                try:
+                    logs = await rpc(session, "eth_getLogs", [{
+                        "fromBlock": hex(cur), "toBlock": hex(end),
+                        "address": USDC_E, "topics": topics,
+                    }])
+                    for log in logs or []:
+                        log["_direction"] = direction
+                        all_logs.append(log)
+                except Exception:
+                    pass
+        done += 1
+        if done % 10 == 0:
+            print(f"    Scanned {done}/{total_chunks} chunks, "
+                  f"{len(all_logs)} logs found so far...")
         cur = end + 1
     return all_logs
 
@@ -212,11 +231,13 @@ async def main():
                 print(f"Error reading trades: {e}")
         print(f"Total trade records: {len(trades)}")
 
-        # Find earliest trade timestamp
+        # Find earliest trade timestamp (but minimum 14 days ago)
         earliest_ts = min((t.get("ts", int(time.time()))
                           for t in trades if t.get("ts")),
-                         default=int(time.time()) - 86400 * 7)
-        print(f"Earliest trade: {time.strftime('%Y-%m-%d %H:%M UTC', time.gmtime(earliest_ts))}")
+                         default=int(time.time()) - 86400 * 14)
+        # Always scan at least 14 days (trade log may be truncated)
+        earliest_ts = min(earliest_ts, int(time.time()) - 86400 * 14)
+        print(f"Scan-from timestamp: {time.strftime('%Y-%m-%d %H:%M UTC', time.gmtime(earliest_ts))}")
 
         # Estimate starting block (~2.3s/block on Polygon)
         seconds_back = int(time.time()) - earliest_ts + 3600
