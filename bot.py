@@ -335,6 +335,20 @@ class TradingBot:
         log.info("ENTRY %s size=$%.2f price=%.3f conf=%d",
                  decision.action, size_usd, decision.token_price, decision.confidence)
 
+        # Check on-chain balance before placing order
+        if not self.dry_run:
+            balance = await self.executor.get_balance_usdc()
+            if balance is not None and balance < size_usd:
+                log.warning("insufficient balance: $%.2f < order $%.2f", balance, size_usd)
+                self.state.entered_this_window = True  # don't retry
+                await self.notifier.send_text(
+                    f"⚠️ Order skipped on {w.slug}\n"
+                    f"Reason: insufficient balance (${balance:.2f} < ${size_usd:.2f})\n"
+                    f"⛔ <b>BOT AUTO-PAUSED</b> — deposit funds and /resume"
+                )
+                config.RUNTIME.paused = True
+                return
+
         # Post limit at best_ask - 0.01 (aggressive maker)
         limit_price = round(max(0.01, decision.token_price - 0.01), 2)
         fill = await self.executor.place_limit_buy(
@@ -346,6 +360,7 @@ class TradingBot:
 
         if not fill.success or fill.filled_shares <= 0:
             log.warning("entry not filled: %s", fill.error)
+            self.state.entered_this_window = True  # prevent retry spam
             await self.notifier.send_text(
                 f"⚠️ Entry not filled on {w.slug}\nReason: {fill.error or 'no fill'}"
             )

@@ -192,6 +192,8 @@ class Executor:
         fill = await self._try_post(token_id, price, shares)
         if fill.success and fill.filled_shares > 0:
             return fill
+        if self._is_balance_error(fill.error):
+            return fill  # no point retrying with zero balance
 
         # Attempt 2: best ask
         await asyncio.sleep(10)
@@ -199,6 +201,8 @@ class Executor:
             await self._cancel(fill.order_id)
         fill2 = await self._try_post(token_id, price + 0.01, shares)
         if fill2.success and fill2.filled_shares > 0:
+            return fill2
+        if self._is_balance_error(fill2.error):
             return fill2
 
         # Attempt 3: go taker IF high confidence
@@ -209,6 +213,14 @@ class Executor:
             return await self._try_post(token_id, price + 0.02, shares)
 
         return FillResult(success=False, error="not filled after retries")
+
+    @staticmethod
+    def _is_balance_error(error: str) -> bool:
+        """Detect balance/allowance errors that won't resolve with retries."""
+        if not error:
+            return False
+        lower = error.lower()
+        return "not enough balance" in lower or "allowance" in lower
 
     async def _try_post(self, token_id: str, price: float, shares: int) -> FillResult:
         client = self._init_client()
@@ -291,16 +303,23 @@ class Executor:
             log.warning("cancel_all failed: %s", exc)
 
     async def get_balance_usdc(self) -> Optional[float]:
-        """Best-effort USDC balance query for the dashboard."""
+        """Query on-chain USDC balance via CLOB client."""
         client = self._init_client()
         if client is None:
             return None
         try:
-            bal = await asyncio.to_thread(getattr(client, "get_balance_allowance", lambda **_: None))
+            from py_clob_client.clob_types import BalanceAllowanceParams, AssetType
+
+            def _query():
+                params = BalanceAllowanceParams(asset_type=AssetType.COLLATERAL)
+                return client.get_balance_allowance(params)
+
+            bal = await asyncio.to_thread(_query)
             if isinstance(bal, dict):
                 for key in ("balance", "usdc", "USDC"):
                     if key in bal:
-                        return float(bal[key])
-        except Exception:
+                        return float(bal[key]) / 1e6  # USDC has 6 decimals
+        except Exception as exc:
+            log.warning("balance query failed: %s", exc)
             return None
         return None
