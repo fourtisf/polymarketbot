@@ -4,12 +4,11 @@ Order execution via py-clob-client.
 Wraps CLOB client in an async-friendly interface. The underlying SDK is
 sync, so we call it via asyncio.to_thread().
 
-All orders are maker (limit) by default to avoid the 1.8% taker fee.
-The retry ladder is:
-  1. Post at best_ask - 0.01 (aggressive maker)
-  2. If not filled in 10s, cancel + repost at best_ask
-  3. If not filled and confidence > 85, repost at best_ask + 0.01 (takes)
-  4. Otherwise give up on this window
+The fill strategy:
+  1. Post GTC at best_ask — should cross the spread for immediate fill
+  2. Poll order status for up to 6s to catch delayed matches
+  3. If still unfilled, cancel + repost at best_ask + 0.01 (taker)
+  4. Poll for 4s more, then give up
 """
 
 import asyncio
@@ -172,8 +171,9 @@ class Executor:
     ) -> FillResult:
         """
         Place a limit BUY for `size_usd` worth of shares at `price`.
-        Retries with the ladder described at module top.
-        Returns FillResult.
+        `price` should be the current best_ask. The method posts at
+        that price to cross the spread, then polls for fills. If not
+        filled, escalates to taker pricing.
         """
         shares = max(5, int(size_usd / max(price, 0.01)))
         log.info(
@@ -188,29 +188,41 @@ class Executor:
                 avg_price=price,
             )
 
-        # Attempt 1: aggressive maker price
+        # Attempt 1: post at best_ask (should cross the spread)
         fill = await self._try_post(token_id, price, shares)
+        if self._is_balance_error(fill.error):
+            return fill
         if fill.success and fill.filled_shares > 0:
             return fill
-        if self._is_balance_error(fill.error):
-            return fill  # no point retrying with zero balance
 
-        # Attempt 2: best ask
-        await asyncio.sleep(10)
+        # Order is live but not yet matched — poll for delayed fills
         if fill.order_id:
+            polled = await self._poll_order_fills(fill.order_id, price, timeout=6)
+            if polled.filled_shares > 0:
+                return polled
             await self._cancel(fill.order_id)
+
+        # Attempt 2: taker at best_ask + 0.01
         fill2 = await self._try_post(token_id, price + 0.01, shares)
-        if fill2.success and fill2.filled_shares > 0:
-            return fill2
         if self._is_balance_error(fill2.error):
             return fill2
+        if fill2.success and fill2.filled_shares > 0:
+            return fill2
 
-        # Attempt 3: go taker IF high confidence
-        if confidence > 85:
-            await asyncio.sleep(5)
-            if fill2.order_id:
-                await self._cancel(fill2.order_id)
-            return await self._try_post(token_id, price + 0.02, shares)
+        if fill2.order_id:
+            polled = await self._poll_order_fills(fill2.order_id, price + 0.01, timeout=4)
+            if polled.filled_shares > 0:
+                return polled
+            await self._cancel(fill2.order_id)
+
+        # Attempt 3: deep taker at best_ask + 0.02
+        fill3 = await self._try_post(token_id, price + 0.02, shares)
+        if self._is_balance_error(fill3.error):
+            return fill3
+        if fill3.success and fill3.filled_shares > 0:
+            return fill3
+        if fill3.order_id:
+            await self._cancel(fill3.order_id)
 
         return FillResult(success=False, error="not filled after retries")
 
@@ -221,6 +233,48 @@ class Executor:
             return False
         lower = error.lower()
         return "not enough balance" in lower or "allowance" in lower
+
+    async def _poll_order_fills(
+        self, order_id: str, price: float, timeout: int = 6
+    ) -> FillResult:
+        """Poll CLOB for fill status on a live order."""
+        client = self._init_client()
+        if client is None:
+            return FillResult(success=False, error="client unavailable")
+
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            await asyncio.sleep(2)
+            try:
+                resp = await asyncio.to_thread(client.get_order, order_id)
+                if not isinstance(resp, dict):
+                    continue
+                size_matched = float(resp.get("size_matched", 0) or 0)
+                status = resp.get("status", "")
+                log.debug("poll %s: status=%s matched=%.1f", order_id[:10], status, size_matched)
+                if size_matched > 0 or status in ("matched", "filled"):
+                    tx_hash = self._extract_tx_hash(resp)
+                    return FillResult(
+                        success=True,
+                        order_id=order_id,
+                        filled_shares=size_matched,
+                        avg_price=float(resp.get("associate_trades", [{}])[0].get("price", price))
+                        if resp.get("associate_trades") else price,
+                        tx_hash=tx_hash,
+                    )
+            except Exception as exc:
+                log.debug("poll order %s error: %s", order_id[:10], exc)
+
+        return FillResult(success=False, order_id=order_id)
+
+    @staticmethod
+    def _extract_tx_hash(resp: dict) -> str:
+        hashes = resp.get("transactionsHashes") or resp.get("transaction_hashes")
+        if isinstance(hashes, list) and hashes:
+            return str(hashes[0])
+        if isinstance(hashes, str):
+            return hashes
+        return resp.get("transactHash") or resp.get("txHash") or ""
 
     async def _try_post(self, token_id: str, price: float, shares: int) -> FillResult:
         client = self._init_client()
@@ -266,14 +320,8 @@ class Executor:
         order_id = resp.get("orderID") or resp.get("order_id") or ""
         status = resp.get("status", "")
         filled = float(resp.get("filled", 0) or 0)
-        tx_hash = ""
-        hashes = resp.get("transactionsHashes") or resp.get("transaction_hashes")
-        if isinstance(hashes, list) and hashes:
-            tx_hash = str(hashes[0])
-        elif isinstance(hashes, str):
-            tx_hash = hashes
-        else:
-            tx_hash = resp.get("transactHash") or resp.get("txHash") or ""
+        tx_hash = self._extract_tx_hash(resp)
+        log.info("order %s status=%s filled=%.1f", order_id[:10], status, filled)
         return FillResult(
             success=status in ("matched", "live", "filled"),
             order_id=order_id,

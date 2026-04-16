@@ -17,6 +17,9 @@ import config
 log = logging.getLogger("polymarket")
 
 
+MAX_STALENESS_SEC = 30  # prices older than this are considered stale
+
+
 class TokenBook:
     __slots__ = ("best_bid", "best_ask", "last_trade", "ts")
 
@@ -25,6 +28,10 @@ class TokenBook:
         self.best_ask: Optional[float] = None
         self.last_trade: Optional[float] = None
         self.ts: float = 0.0
+
+    @property
+    def is_stale(self) -> bool:
+        return self.ts > 0 and (time.time() - self.ts) > MAX_STALENESS_SEC
 
 
 class PolymarketFeed(AsyncReconnectingWS):
@@ -87,18 +94,24 @@ class PolymarketFeed(AsyncReconnectingWS):
     # ── Public API ───────────────────────────────────────────
     def get_best_bid(self, token_id: str) -> Optional[float]:
         b = self.tokens.get(token_id)
-        return b.best_bid if b else None
+        if not b or b.is_stale:
+            return None
+        return b.best_bid
 
     def get_best_ask(self, token_id: str) -> Optional[float]:
         b = self.tokens.get(token_id)
-        return b.best_ask if b else None
+        if not b or b.is_stale:
+            return None
+        return b.best_ask
 
     def get_mid(self, token_id: str) -> Optional[float]:
         b = self.tokens.get(token_id)
-        if not b or b.best_bid is None or b.best_ask is None:
+        if not b or b.is_stale or b.best_bid is None or b.best_ask is None:
             return None
         return (b.best_bid + b.best_ask) / 2
 
     def get_last(self, token_id: str) -> Optional[float]:
         b = self.tokens.get(token_id)
-        return b.last_trade if b else None
+        if not b or b.is_stale:
+            return None
+        return b.last_trade

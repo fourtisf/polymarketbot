@@ -349,11 +349,14 @@ class TradingBot:
                 config.RUNTIME.paused = True
                 return
 
-        # Post limit at best_ask - 0.01 (aggressive maker)
-        limit_price = round(max(0.01, decision.token_price - 0.01), 2)
+        # Refresh best_ask from the live feed to avoid stale prices
+        fresh_ask = self.polymarket.get_best_ask(decision.token_id)
+        best_ask = fresh_ask if fresh_ask and fresh_ask > 0 else decision.token_price
+        best_ask = round(max(0.01, best_ask), 2)
+
         fill = await self.executor.place_limit_buy(
             token_id=decision.token_id,
-            price=limit_price,
+            price=best_ask,
             size_usd=size_usd,
             confidence=decision.confidence,
         )
@@ -374,7 +377,7 @@ class TradingBot:
             "action": decision.action,
             "side": "UP" if decision.action == "BUY_UP" else "DOWN",
             "entry_price": fill.avg_price,
-            "limit_price": limit_price,
+            "limit_price": best_ask,
             "shares": fill.filled_shares,
             "cost": round(fill.avg_price * fill.filled_shares, 2),
             "confidence": decision.confidence,
