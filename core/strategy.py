@@ -97,17 +97,21 @@ def calculate_confidence(
     else:
         reasons.append("Binance volume LOW (+0)")
 
-    if token_price <= 0.60:
+    if token_price <= 0.45:
+        score += 15
+        reasons.append(f"Token @ ${token_price:.2f} = great value (+15)")
+    elif token_price <= 0.52:
         score += 10
-        reasons.append(f"Token @ ${token_price:.2f} = excellent value (+10)")
-    elif token_price <= 0.72:
-        score += 7
-        reasons.append(f"Token @ ${token_price:.2f} = good value (+7)")
-    elif token_price <= 0.82:
-        score += 3
-        reasons.append(f"Token @ ${token_price:.2f} = okay value (+3)")
+        reasons.append(f"Token @ ${token_price:.2f} = good value (+10)")
+    elif token_price <= 0.58:
+        score += 5
+        reasons.append(f"Token @ ${token_price:.2f} = okay value (+5)")
+    elif token_price <= 0.65:
+        score += 0
+        reasons.append(f"Token @ ${token_price:.2f} = marginal (+0)")
     else:
-        reasons.append(f"Token @ ${token_price:.2f} = expensive (+0)")
+        score -= 20
+        reasons.append(f"Token @ ${token_price:.2f} = too expensive (-20)")
 
     return score, reasons
 
@@ -176,11 +180,11 @@ def decide(ctx: TradeContext) -> TradeDecision:
             reason_log={"skip_reason": "token_unavailable", **_ctx_dict(ctx)},
         )
 
-    # Profit margin floor — must leave at least 4c of edge
-    if token_price >= 0.95:
+    # Profit margin floor — need at least 35c of edge for good risk/reward
+    if token_price >= 0.65:
         return TradeDecision(
             action="SKIP",
-            reasons=[f"Token ${token_price:.2f} too rich — margin < 5c"],
+            reasons=[f"Token ${token_price:.2f} too expensive — need price below 65c"],
             reason_log={"skip_reason": "margin_too_thin", **_ctx_dict(ctx)},
         )
 
