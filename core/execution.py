@@ -381,10 +381,10 @@ class Executor:
                 )
                 status = resp.get("status", "")
                 log.debug("poll %s: status=%s matched=%.1f", order_id[:10], status, size_matched)
-                if size_matched > 0 or status in ("matched", "filled"):
+                if size_matched > 0:
                     tx_hash = self._extract_tx_hash(resp)
                     avg = price
-                    if size_matched > 0 and resp.get("makingAmount"):
+                    if resp.get("makingAmount"):
                         try:
                             avg = round(float(resp["makingAmount"]) / size_matched, 4)
                         except (ValueError, ZeroDivisionError):
@@ -397,10 +397,16 @@ class Executor:
                     return FillResult(
                         success=True,
                         order_id=order_id,
-                        filled_shares=size_matched if size_matched > 0 else 1.0,
+                        filled_shares=size_matched,
                         avg_price=avg,
                         tx_hash=tx_hash,
                     )
+                elif status in ("matched", "filled"):
+                    # Status says matched but size_matched is 0 — likely
+                    # the fill data hasn't propagated yet. DON'T default to
+                    # 1.0 shares which creates phantom fills. Keep polling.
+                    log.warning("poll %s: status=%s but size_matched=0 — still polling",
+                                order_id[:10], status)
             except Exception as exc:
                 log.debug("poll order %s error: %s", order_id[:10], exc)
 
@@ -725,6 +731,42 @@ class Executor:
                 if ok:
                     return tx_hash
             return None
+
+    async def verify_token_balance(self, token_id: str) -> float:
+        """
+        Check on-chain CTF balance for a token at the EOA.
+        Returns the balance in USDC-equivalent (raw / 1e6).
+        """
+        import aiohttp
+        from eth_account import Account
+
+        acct = Account.from_key(config.POLYGON_PRIVATE_KEY)
+        addr_padded = acct.address.lower().replace("0x", "").rjust(64, "0")
+
+        try:
+            token_int = int(token_id)
+            token_hex = hex(token_int)[2:].rjust(64, "0")
+        except (ValueError, OverflowError):
+            log.warning("verify_token_balance: invalid token_id %s", token_id[:20])
+            return 0.0
+
+        # balanceOf(address, uint256) selector = 0x00fdd58e
+        call_data = "0x00fdd58e" + addr_padded + token_hex
+
+        try:
+            async with aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=10)
+            ) as session:
+                result = await self._rpc(session, "eth_call", [
+                    {"to": self.CTF_CONTRACT, "data": call_data}, "latest"
+                ])
+                if result and result != "0x":
+                    raw = int(result, 16)
+                    return raw / 1e6  # Polymarket uses 1e6 decimals
+        except Exception as exc:
+            log.warning("verify_token_balance failed: %s", exc)
+
+        return 0.0
 
     async def get_balance_usdc(self) -> Optional[float]:
         """Query on-chain USDC balance via CLOB client."""

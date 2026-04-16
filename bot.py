@@ -480,6 +480,49 @@ class TradingBot:
         win = (side == w.resolution)
         entry = rec["entry_price"]
         shares = rec["shares"]
+
+        # ── On-chain verification: confirm tokens actually exist ──
+        # This prevents phantom PnL from unfilled CLOB orders.
+        verified_on_chain = False
+        token_balance = 0.0
+        if not self.dry_run and rec.get("token_id"):
+            try:
+                token_balance = await self.executor.verify_token_balance(rec["token_id"])
+                verified_on_chain = token_balance > 0
+                log.info("settle verify: token=%s balance=%.4f verified=%s",
+                         rec["token_id"][:15], token_balance, verified_on_chain)
+            except Exception as exc:
+                log.warning("settle verify failed: %s — proceeding with CLOB data", exc)
+                verified_on_chain = True  # Don't block on RPC errors
+        else:
+            verified_on_chain = True  # dry-run or no token_id: trust CLOB
+
+        if not verified_on_chain:
+            # Token balance is 0 — the CLOB order was likely never filled on-chain
+            log.error("PHANTOM TRADE DETECTED: token %s has 0 balance at EOA! "
+                      "CLOB reported fill but no on-chain tokens. "
+                      "Skipping PnL recording.", rec["token_id"][:15])
+            rec_phantom = {
+                **rec,
+                "outcome": "phantom",
+                "pnl": 0.0,
+                "close_price": close_price,
+                "resolution": w.resolution,
+                "phantom": True,
+                "phase": "phantom_detected",
+            }
+            self.trade_log.log_trade(rec_phantom)
+            await self.notifier.send_text(
+                f"⚠️ <b>PHANTOM TRADE</b> — {window_label_from_slug(w.slug)}\n"
+                f"CLOB reported fill but NO tokens found on-chain.\n"
+                f"Side: {side} | Order: <code>{rec.get('order_id', '?')[:20]}</code>\n"
+                f"PnL NOT recorded. Check CLOB API credentials and order flow."
+            )
+            self.state.window = None
+            self.state.entry_record = None
+            self.state.entered_this_window = False
+            return
+
         if win:
             pnl = round((1.0 - entry) * shares, 2)
             outcome = "win"
@@ -492,6 +535,7 @@ class TradingBot:
             "pnl": pnl,
             "close_price": close_price,
             "resolution": w.resolution,
+            "verified_on_chain": True,
         }
         self.pnl.record(rec_final)
         self.risk.record_trade(pnl)
