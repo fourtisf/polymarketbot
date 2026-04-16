@@ -551,14 +551,12 @@ class TradingBot:
 
         # Notification
         today = self.pnl.today_stats()
-        alltime = self.pnl.alltime_stats()
         delta_close = (close_price - w.price_to_beat) / w.price_to_beat * 100
         market_lnk = market_link_html(w.slug)
         tx_lnk = tx_link_html(rec.get("tx_hash", "")) if rec.get("tx_hash") else ""
         wins_today = today.get("wins", 0)
         losses_today = today.get("losses", 0)
         wr = today.get("win_rate", 0)
-        bal = alltime["current_balance"]
         tx_line = f"\nTX: {tx_lnk}" if tx_lnk else ""
         if win:
             text = (
@@ -569,7 +567,7 @@ class TradingBot:
                 f"{tx_line}\n"
                 f"🔗 {market_lnk}\n"
                 f"Today: {today['pnl']:+.2f} "
-                f"({wins_today}W/{losses_today}L) {wr}% | Bot balance: ${bal:.2f}"
+                f"({wins_today}W/{losses_today}L) {wr}%"
                 f"{onchain_bal}"
             )
         else:
@@ -581,7 +579,7 @@ class TradingBot:
                 f"{tx_line}\n"
                 f"🔗 {market_lnk}\n"
                 f"Today: {today['pnl']:+.2f} "
-                f"({wins_today}W/{losses_today}L) {wr}% | Bot balance: ${bal:.2f}"
+                f"({wins_today}W/{losses_today}L) {wr}%"
                 f"{onchain_bal}"
             )
         await self.notifier.send_text(text)

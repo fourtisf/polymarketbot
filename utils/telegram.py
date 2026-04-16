@@ -739,7 +739,7 @@ class CommandBot:
             f"Session:  <b>{session_pnl:+.2f}</b> {_ico(session_pnl)}\n"
             f"Today:    {t['pnl']:+.2f} · {t['trades']}t · WR {t['win_rate']}%\n"
             f"All-time: {a['pnl']:+.2f} · {a['trades']}t · WR {a['win_rate']}%\n"
-            f"Balance:  ${a['current_balance']:.2f} (ROI {a['roi_pct']:+.1f}%)\n"
+            f"Balance:  <b>${usdc:,.2f}</b> (on-chain)\n"
             f"{BAR}\n"
             f"Pick an action:"
         )
@@ -1018,6 +1018,16 @@ class CommandBot:
         m = self._month_stats()
         a = self.pnl.alltime_stats()
         sess = self.risk.state.session_pnl
+
+        # Fetch actual on-chain balance
+        usdc_onchain = 0.0
+        addr = config.POLYGON_PUBLIC_KEY or ""
+        if addr.startswith("0x") and len(addr) == 42:
+            try:
+                usdc_onchain, _ = await fetch_balances(addr)
+            except Exception:
+                pass
+
         await self.notifier.send_text(
             f"💰 <b>PnL SUMMARY</b>\n"
             f"{BAR}\n"
@@ -1031,8 +1041,7 @@ class CommandBot:
             f"All Time:  {a['pnl']:+.2f} {_ico(a['pnl'])} "
             f"({a['trades']}t · WR {a['win_rate']}%)\n"
             f"{BAR}\n"
-            f"Balance: <b>${a['current_balance']:.2f}</b> "
-            f"(ROI {a['roi_pct']:+.1f}%)",
+            f"Balance: <b>${usdc_onchain:,.2f}</b> (on-chain USDC.e)",
             chat_id=chat_id,
         )
 
@@ -1048,6 +1057,16 @@ class CommandBot:
         t = self.pnl.today_stats()
         a = self.pnl.alltime_stats()
         streak = self.pnl.current_streak()
+
+        # Fetch actual on-chain balance
+        usdc_onchain = 0.0
+        addr = config.POLYGON_PUBLIC_KEY or ""
+        if addr.startswith("0x") and len(addr) == 42:
+            try:
+                usdc_onchain, _ = await fetch_balances(addr)
+            except Exception:
+                pass
+
         text = (
             f"📊 <b>FULL STATISTICS</b>\n"
             f"{BAR}\n"
@@ -1055,7 +1074,7 @@ class CommandBot:
             f"{BAR}\n"
             f"{_fmt_stats_block('All-time', a)}\n"
             f"{BAR}\n"
-            f"Balance:     <b>${a['current_balance']:.2f}</b>\n"
+            f"Balance:     <b>${usdc_onchain:,.2f}</b> (on-chain)\n"
             f"Starting:    ${a['starting_balance']:.2f}\n"
             f"ROI:         {a['roi_pct']:+.2f}%\n"
             f"Max DD:      {a['max_drawdown']:+.2f}\n"
