@@ -542,8 +542,8 @@ class Executor:
             timeout=aiohttp.ClientTimeout(total=60)
         ) as session:
             try:
-                # Estimate gas first via eth_estimateGas, fallback to 300k
-                gas_limit = 300_000
+                # Estimate gas — if this fails, there's nothing to redeem
+                # (condition not resolved or no tokens held)
                 try:
                     est_hex = await self._rpc(session, "eth_estimateGas", [{
                         "from": acct.address,
@@ -554,7 +554,9 @@ class Executor:
                     gas_limit = int(estimated * 1.5)  # 50% buffer
                     log.info("redeem: estimated gas=%d, using %d", estimated, gas_limit)
                 except Exception as est_exc:
-                    log.warning("redeem: gas estimate failed (%s), using %d", est_exc, gas_limit)
+                    log.info("redeem: gas estimate failed — nothing to redeem or "
+                             "not yet resolved: %s", est_exc)
+                    return None
 
                 nonce = int(await self._rpc(session, "eth_getTransactionCount",
                                             [acct.address, "latest"]), 16)

@@ -413,6 +413,7 @@ class CommandBot:
             {"command": "risk", "description": "Risk status"},
             {"command": "status", "description": "Current live window"},
             {"command": "settings", "description": "Edit settings"},
+            {"command": "redeem", "description": "Claim winning positions → USDC.e"},
             {"command": "pause", "description": "30 min cooldown"},
             {"command": "help", "description": "Show all commands"},
         ]
@@ -502,6 +503,8 @@ class CommandBot:
             "/risk": self._cmd_risk,
             "/settings": self._cmd_settings,
             "/config": self._cmd_settings,
+            "/redeem": self._cmd_redeem,
+            "/claim": self._cmd_redeem,
             "/pause": self._cmd_pause,
             "/help": self._cmd_help,
         }
@@ -540,9 +543,11 @@ class CommandBot:
         elif data == "nav:dashboard":
             await self._send_dashboard(chat_id, edit_msg_id=msg_id)
 
-        # Wallet refresh
+        # Wallet refresh / redeem
         elif data == "wallet:refresh":
             await self._cmd_wallet([], chat_id)
+        elif data == "wallet:redeem":
+            await self._cmd_redeem([], chat_id)
 
         # Mode toggle flow (confirmation required for LIVE)
         elif data == "mode:toggle":
@@ -953,10 +958,15 @@ class CommandBot:
                 "Swap native USDC → USDC.e on QuickSwap or Uniswap (Polygon)."
             )
         text = "\n".join(lines)
-        kb = {"inline_keyboard": [[
-            {"text": "🔄 Refresh",    "callback_data": "wallet:refresh"},
-            {"text": "⬅️ Dashboard", "callback_data": "nav:dashboard"},
-        ]]}
+        kb = {"inline_keyboard": [
+            [
+                {"text": "🔄 Refresh",    "callback_data": "wallet:refresh"},
+                {"text": "💰 Redeem",     "callback_data": "wallet:redeem"},
+            ],
+            [
+                {"text": "⬅️ Dashboard", "callback_data": "nav:dashboard"},
+            ],
+        ]}
         await self.notifier.send_text(text, chat_id=chat_id, reply_markup=kb)
 
     async def _cmd_status(self, args, chat_id):
@@ -1125,6 +1135,177 @@ class CommandBot:
             chat_id=chat_id,
         )
 
+    # ── /redeem — claim winning positions ────────────────
+    async def _cmd_redeem(self, args, chat_id):
+        """Scan for unredeemed winning positions and redeem them on-chain."""
+        if not config.POLYGON_PRIVATE_KEY:
+            await self.notifier.send_text(
+                "No wallet set. Use /setwallet first.", chat_id=chat_id
+            )
+            return
+
+        # Show working message
+        status = await self.notifier.send_text(
+            "🔄 <b>Scanning for unredeemed winning positions...</b>",
+            chat_id=chat_id,
+        )
+        status_msg_id = None
+        try:
+            status_msg_id = status.get("result", {}).get("message_id")
+        except Exception:
+            pass
+
+        addr = config.POLYGON_PUBLIC_KEY or ""
+        # Get balance before
+        try:
+            bal_before, _, _ = await fetch_all_usdc(addr)
+        except Exception:
+            bal_before = 0.0
+
+        # Collect winning trades from PnL tracker
+        wins = []
+        try:
+            all_trades = self.pnl.all_trades()
+            for t in all_trades:
+                if t.get("outcome") == "win" and t.get("window_slug"):
+                    wins.append(t)
+        except Exception as exc:
+            log.warning("redeem: failed to read trade log: %s", exc)
+
+        # Also try reading trades.json directly as fallback
+        if not wins:
+            try:
+                import json as _json
+                tf = config.TRADES_FILE
+                if tf.exists():
+                    raw = _json.loads(tf.read_text() or "[]")
+                    for t in raw:
+                        if t.get("outcome") == "win" and t.get("window_slug"):
+                            wins.append(t)
+            except Exception:
+                pass
+
+        if not wins:
+            text = (
+                "💰 <b>REDEEM</b>\n"
+                f"{BAR}\n"
+                "No winning trades found in log.\n\n"
+                "If you have positions from manual trades, "
+                "use the Polymarket website to redeem."
+            )
+            if status_msg_id:
+                await self.notifier.edit_text(chat_id, status_msg_id, text)
+            else:
+                await self.notifier.send_text(text, chat_id=chat_id)
+            return
+
+        # De-duplicate by window slug and look up conditionIds
+        seen_slugs: set = set()
+        seen_conditions: set = set()
+        redeemed = 0
+        failed = 0
+        skipped = 0
+        results_lines: list = []
+
+        for win in wins:
+            slug = win["window_slug"]
+            if slug in seen_slugs:
+                continue
+            seen_slugs.add(slug)
+
+            # Look up conditionId via Gamma API
+            cond_id = await self._gamma_condition_id(slug)
+            if not cond_id:
+                skipped += 1
+                continue
+            if cond_id in seen_conditions:
+                continue
+            seen_conditions.add(cond_id)
+
+            # Update status
+            if status_msg_id:
+                try:
+                    await self.notifier.edit_text(
+                        chat_id, status_msg_id,
+                        f"🔄 Redeeming <b>{slug}</b>...\n"
+                        f"({redeemed} done, {len(seen_slugs)}/{len(wins)} checked)"
+                    )
+                except Exception:
+                    pass
+
+            # Try to redeem
+            try:
+                tx_hash = await self.executor.redeem_positions(cond_id)
+                if tx_hash:
+                    redeemed += 1
+                    results_lines.append(
+                        f"✅ {window_label_from_slug(slug)} — "
+                        f"{tx_link_html(tx_hash)}"
+                    )
+                else:
+                    skipped += 1  # nothing to redeem (already redeemed or not resolved)
+            except Exception as exc:
+                failed += 1
+                results_lines.append(f"❌ {window_label_from_slug(slug)} — {exc}")
+
+        # Get balance after
+        try:
+            bal_after, _, _ = await fetch_all_usdc(addr)
+        except Exception:
+            bal_after = 0.0
+
+        gained = bal_after - bal_before
+        results_text = "\n".join(results_lines) if results_lines else "None"
+
+        text = (
+            f"💰 <b>REDEEM COMPLETE</b>\n"
+            f"{BAR}\n"
+            f"Winning trades found: {len(seen_slugs)}\n"
+            f"Redeemed: <b>{redeemed}</b> ✅\n"
+            f"Already claimed / not resolved: {skipped}\n"
+            f"Failed: {failed}\n"
+            f"{BAR}\n"
+            f"{results_text}\n"
+            f"{BAR}\n"
+            f"USDC.e before: ${bal_before:.2f}\n"
+            f"USDC.e after:  <b>${bal_after:.2f}</b>\n"
+        )
+        if gained > 0.001:
+            text += f"Gained: <b>+${gained:.2f}</b> 🎉"
+        elif gained < -0.001:
+            text += f"Change: -${abs(gained):.2f} (gas fees)"
+        else:
+            text += "No change (positions may already be claimed)"
+
+        if status_msg_id:
+            await self.notifier.edit_text(chat_id, status_msg_id, text)
+        else:
+            await self.notifier.send_text(text, chat_id=chat_id)
+
+    @staticmethod
+    async def _gamma_condition_id(slug: str) -> Optional[str]:
+        """Look up conditionId from Gamma API by market slug."""
+        url = f"{config.GAMMA_HOST}/markets"
+        params = {"slug": slug}
+        try:
+            async with aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=10)
+            ) as s:
+                async with s.get(url, params=params) as resp:
+                    if resp.status != 200:
+                        return None
+                    data = await resp.json()
+            markets = data if isinstance(data, list) else data.get("data", [])
+            if not markets:
+                return None
+            return (
+                markets[0].get("conditionId")
+                or markets[0].get("condition_id")
+                or ""
+            )
+        except Exception:
+            return None
+
     async def _cmd_help(self, args, chat_id):
         text = (
             "❓ <b>HELP — Command List</b>\n"
@@ -1138,10 +1319,11 @@ class CommandBot:
             "/setwallet — Set private key (auto-deleted)\n"
             f"{BAR}\n"
             "<b>Trading</b>\n"
-            "/go    — Start auto trading\n"
-            "/stop  — Stop auto trading\n"
-            "/mode  — Toggle DRY-RUN / LIVE\n"
-            "/pause — 30 min cooldown\n"
+            "/go     — Start auto trading\n"
+            "/stop   — Stop auto trading\n"
+            "/mode   — Toggle DRY-RUN / LIVE\n"
+            "/redeem — Claim winning positions → USDC.e\n"
+            "/pause  — 30 min cooldown\n"
             f"{BAR}\n"
             "<b>Info</b>\n"
             "/pnl    — Profit / loss summary\n"
