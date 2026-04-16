@@ -37,7 +37,10 @@ log = logging.getLogger("telegram")
 # ─────────────────────────────────────────────────────────────
 
 POLYGON_RPC = "https://polygon-bor-rpc.publicnode.com"
-USDC_CONTRACT = "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359"
+# Polymarket uses USDC.e (bridged) — NOT native USDC
+USDC_E_CONTRACT = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
+USDC_NATIVE_CONTRACT = "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359"
+USDC_CONTRACT = USDC_E_CONTRACT  # Polymarket collateral
 ENV_PATH = Path(config.PROJECT_ROOT) / ".env"
 
 BAR = "━━━━━━━━━━━━━━"
@@ -150,18 +153,45 @@ async def _rpc_call(session: aiohttp.ClientSession, method: str, params: list) -
 
 
 async def fetch_balances(address: str) -> Tuple[float, float]:
-    """Return (usdc, pol) balances for ``address`` on Polygon mainnet."""
+    """Return (usdc_e, pol) balances for ``address`` on Polygon mainnet.
+
+    Returns USDC.e (bridged) balance — the token Polymarket actually uses.
+    """
     addr = address.lower().replace("0x", "").rjust(40, "0")
     data = "0x70a08231" + "0" * 24 + addr  # balanceOf(address)
     async with aiohttp.ClientSession() as s:
         pol_hex = await _rpc_call(s, "eth_getBalance", [address, "latest"])
         usdc_hex = await _rpc_call(
             s, "eth_call",
-            [{"to": USDC_CONTRACT, "data": data}, "latest"],
+            [{"to": USDC_E_CONTRACT, "data": data}, "latest"],
         )
     pol = int(pol_hex, 16) / 1e18 if pol_hex else 0.0
     usdc = int(usdc_hex, 16) / 1e6 if usdc_hex and usdc_hex != "0x" else 0.0
     return usdc, pol
+
+
+async def fetch_all_usdc(address: str) -> Tuple[float, float, float]:
+    """Return (usdc_e, usdc_native, pol) for diagnostics.
+
+    Polymarket uses USDC.e. If the user has native USDC but not USDC.e,
+    they need to swap via a DEX (e.g. Uniswap/QuickSwap on Polygon).
+    """
+    addr = address.lower().replace("0x", "").rjust(40, "0")
+    data = "0x70a08231" + "0" * 24 + addr
+    async with aiohttp.ClientSession() as s:
+        pol_hex = await _rpc_call(s, "eth_getBalance", [address, "latest"])
+        usdc_e_hex = await _rpc_call(
+            s, "eth_call",
+            [{"to": USDC_E_CONTRACT, "data": data}, "latest"],
+        )
+        usdc_nat_hex = await _rpc_call(
+            s, "eth_call",
+            [{"to": USDC_NATIVE_CONTRACT, "data": data}, "latest"],
+        )
+    pol = int(pol_hex, 16) / 1e18 if pol_hex else 0.0
+    usdc_e = int(usdc_e_hex, 16) / 1e6 if usdc_e_hex and usdc_e_hex != "0x" else 0.0
+    usdc_nat = int(usdc_nat_hex, 16) / 1e6 if usdc_nat_hex and usdc_nat_hex != "0x" else 0.0
+    return usdc_e, usdc_nat, pol
 
 
 # ─────────────────────────────────────────────────────────────
@@ -579,10 +609,10 @@ class CommandBot:
             pass
 
         try:
-            usdc, pol = await fetch_balances(address)
+            usdc_e, usdc_nat, pol = await fetch_all_usdc(address)
         except Exception as exc:
             log.warning("balance fetch failed: %s", exc)
-            usdc, pol = 0.0, 0.0
+            usdc_e, usdc_nat, pol = 0.0, 0.0, 0.0
 
         api_key = api_secret = api_pass = ""
         try:
@@ -627,15 +657,25 @@ class CommandBot:
             except Exception as exc:
                 log.warning("reload_wallet failed: %s", exc)
 
-        text = (
-            f"✅ <b>Wallet connected</b>\n"
-            f"<code>{_short_addr(address)}</code>\n"
-            f"{BAR}\n"
-            f"💵 USDC: <b>${usdc:,.2f}</b>\n"
-            f"⛽ POL:  <b>{pol:,.4f}</b>\n"
-            + ("🔑 Polymarket API credentials derived.\n" if api_key else "")
-            + "\nUse /start to open the dashboard."
-        )
+        wallet_lines = [
+            f"✅ <b>Wallet connected</b>",
+            f"<code>{_short_addr(address)}</code>",
+            BAR,
+            f"💵 USDC.e: <b>${usdc_e:,.2f}</b> (Polymarket)",
+        ]
+        if usdc_nat > 0.01:
+            wallet_lines.append(f"💰 USDC (native): <b>${usdc_nat:,.2f}</b>")
+        wallet_lines.append(f"⛽ POL:  <b>{pol:,.4f}</b>")
+        if api_key:
+            wallet_lines.append("🔑 Polymarket API credentials derived.")
+        if usdc_e < 1.0 and usdc_nat > 1.0:
+            wallet_lines.append("")
+            wallet_lines.append(
+                "⚠️ <b>Polymarket needs USDC.e, not native USDC.</b>\n"
+                "Swap native USDC → USDC.e on QuickSwap or Uniswap (Polygon)."
+            )
+        wallet_lines.append("\nUse /start to open the dashboard.")
+        text = "\n".join(wallet_lines)
         if status_msg_id:
             await self.notifier.edit_text(chat_id, status_msg_id, text)
         else:
@@ -891,18 +931,28 @@ class CommandBot:
             )
             return
         try:
-            usdc, pol = await fetch_balances(addr)
+            usdc_e, usdc_nat, pol = await fetch_all_usdc(addr)
         except Exception as exc:
             await self.notifier.send_text(
                 f"Balance fetch failed: {exc}", chat_id=chat_id
             )
             return
-        text = (
-            f"👛 <b>WALLET</b>\n"
-            f"{BAR}\n"
-            f"🔑 {wallet_link_html(addr, addr)}\n"
-            f"💵 USDC: <b>${usdc:,.2f}</b> · ⛽ POL: <b>{pol:,.4f}</b>"
-        )
+        lines = [
+            f"👛 <b>WALLET</b>",
+            BAR,
+            f"🔑 {wallet_link_html(addr, addr)}",
+            f"💵 USDC.e: <b>${usdc_e:,.2f}</b> (Polymarket)",
+        ]
+        if usdc_nat > 0.01:
+            lines.append(f"💰 USDC (native): <b>${usdc_nat:,.2f}</b>")
+        lines.append(f"⛽ POL: <b>{pol:,.4f}</b>")
+        if usdc_e < 1.0 and usdc_nat > 1.0:
+            lines.append("")
+            lines.append(
+                "⚠️ <b>Polymarket needs USDC.e, not native USDC.</b>\n"
+                "Swap native USDC → USDC.e on QuickSwap or Uniswap (Polygon)."
+            )
+        text = "\n".join(lines)
         kb = {"inline_keyboard": [[
             {"text": "🔄 Refresh",    "callback_data": "wallet:refresh"},
             {"text": "⬅️ Dashboard", "callback_data": "nav:dashboard"},

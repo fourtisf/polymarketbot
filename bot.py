@@ -45,7 +45,7 @@ from utils.pnl_tracker import PnLTracker
 from utils.telegram import (
     CommandBot,
     Notifier,
-    fetch_balances,
+    fetch_all_usdc,
     market_link_html,
     tx_link_html,
     wallet_link_html,
@@ -336,21 +336,32 @@ class TradingBot:
         log.info("ENTRY %s size=$%.2f price=%.3f conf=%d",
                  decision.action, size_usd, decision.token_price, decision.confidence)
 
-        # Check on-chain USDC balance before placing order
+        # Check on-chain USDC.e balance (Polymarket collateral) before placing order
         if not self.dry_run and config.POLYGON_PUBLIC_KEY:
             try:
-                usdc_balance, _ = await fetch_balances(config.POLYGON_PUBLIC_KEY)
+                usdc_e, usdc_nat, _ = await fetch_all_usdc(config.POLYGON_PUBLIC_KEY)
             except Exception as exc:
                 log.warning("balance check failed: %s — proceeding anyway", exc)
-                usdc_balance = None
-            if usdc_balance is not None and usdc_balance < size_usd:
-                log.warning("insufficient balance: $%.2f < order $%.2f", usdc_balance, size_usd)
+                usdc_e = None
+                usdc_nat = 0.0
+            if usdc_e is not None and usdc_e < size_usd:
+                log.warning("insufficient USDC.e: $%.2f < order $%.2f (native USDC: $%.2f)",
+                            usdc_e, size_usd, usdc_nat)
                 self.state.entered_this_window = True
-                await self.notifier.send_text(
-                    f"⚠️ Order skipped on {w.slug}\n"
-                    f"Reason: insufficient USDC (${usdc_balance:.2f} < ${size_usd:.2f})\n"
-                    f"⛔ <b>BOT AUTO-PAUSED</b> — deposit funds and /resume"
-                )
+                if usdc_nat > 1.0:
+                    reason = (
+                        f"⚠️ Order skipped on {w.slug}\n"
+                        f"Reason: $0 USDC.e (Polymarket needs USDC.e, not native USDC)\n"
+                        f"You have ${usdc_nat:.2f} native USDC — swap to USDC.e on QuickSwap/Uniswap (Polygon)\n"
+                        f"⛔ <b>BOT AUTO-PAUSED</b> — swap and /resume"
+                    )
+                else:
+                    reason = (
+                        f"⚠️ Order skipped on {w.slug}\n"
+                        f"Reason: insufficient USDC.e (${usdc_e:.2f} < ${size_usd:.2f})\n"
+                        f"⛔ <b>BOT AUTO-PAUSED</b> — deposit USDC.e and /resume"
+                    )
+                await self.notifier.send_text(reason)
                 config.RUNTIME.paused = True
                 return
 
