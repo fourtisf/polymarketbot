@@ -155,9 +155,16 @@ class DashboardServer:
     async def start(self) -> None:
         self._runner = web.AppRunner(self.app)
         await self._runner.setup()
-        site = web.TCPSite(self._runner, "0.0.0.0", config.DASHBOARD_PORT)
-        await site.start()
-        log.info("dashboard listening on port %d", config.DASHBOARD_PORT)
+        port = config.DASHBOARD_PORT
+        site = web.TCPSite(self._runner, "0.0.0.0", port, reuse_address=True)
+        try:
+            await site.start()
+            log.info("dashboard listening on port %d", port)
+        except OSError as exc:
+            log.error("dashboard failed to bind port %d: %s — bot continues without dashboard", port, exc)
+            # Don't crash the entire bot over a dashboard port conflict
+            await self._runner.cleanup()
+            self._runner = None
 
     async def stop(self) -> None:
         if self._runner is not None:
