@@ -415,6 +415,7 @@ class CommandBot:
             {"command": "settings", "description": "Edit settings"},
             {"command": "pos", "description": "Current open position details"},
             {"command": "exit", "description": "Close/sell current position"},
+            {"command": "recover", "description": "Find & recover all USDC.e"},
             {"command": "redeem", "description": "Claim winning positions → USDC.e"},
             {"command": "pause", "description": "30 min cooldown"},
             {"command": "help", "description": "Show all commands"},
@@ -511,6 +512,8 @@ class CommandBot:
             "/position": self._cmd_position,
             "/exit": self._cmd_exit,
             "/close": self._cmd_exit,
+            "/recover": self._cmd_recover,
+            "/sweep": self._cmd_recover,
             "/pause": self._cmd_pause,
             "/help": self._cmd_help,
         }
@@ -558,6 +561,8 @@ class CommandBot:
             await self._cmd_position([], chat_id)
         elif data == "nav:exit":
             await self._cmd_exit([], chat_id)
+        elif data == "nav:recover":
+            await self._cmd_recover([], chat_id)
 
         # Mode toggle flow (confirmation required for LIVE)
         elif data == "mode:toggle":
@@ -1373,6 +1378,47 @@ class CommandBot:
                 f"❌ Exit error: {str(exc)[:100]}", chat_id=chat_id
             )
 
+    async def _cmd_recover(self, args, chat_id):
+        """Run comprehensive balance recovery — find and collect all USDC.e."""
+        await self.notifier.send_text(
+            "\U0001f50d <b>BALANCE RECOVERY</b>\nScanning all locations...",
+            chat_id=chat_id,
+        )
+        try:
+            result = await self.executor.full_balance_recovery()
+            eoa = result.get("eoa_balance", 0)
+            proxy = result.get("proxy_balance", 0)
+            clob = result.get("clob_balance", 0)
+            orders = result.get("open_orders", 0)
+            recovered = result.get("recovered", 0)
+            actions = result.get("actions", [])
+
+            actions_text = ""
+            if actions:
+                actions_text = "\n".join(f"  - {a}" for a in actions)
+                actions_text = f"\n\n<b>Actions taken:</b>\n{actions_text}"
+
+            text = (
+                f"\U0001f4b0 <b>RECOVERY REPORT</b>\n"
+                f"{BAR}\n"
+                f"EOA wallet: <b>${eoa:,.2f}</b>\n"
+                f"Proxy wallet: ${proxy:,.2f}\n"
+                f"CLOB exchange: ${clob:,.2f}\n"
+                f"Open orders: {orders}\n"
+                f"{BAR}\n"
+                f"Recovered: <b>${recovered:,.2f}</b>"
+                f"{actions_text}"
+            )
+            kb = {"inline_keyboard": [
+                [{"text": "\U0001f504 Run Again", "callback_data": "nav:recover"}],
+                [{"text": "\U0001f3e0 Dashboard", "callback_data": "nav:dashboard"}],
+            ]}
+            await self.notifier.send_text(text, chat_id=chat_id, reply_markup=kb)
+        except Exception as exc:
+            await self.notifier.send_text(
+                f"\u274c Recovery error: {str(exc)[:200]}", chat_id=chat_id
+            )
+
     async def _cmd_risk(self, args, chat_id):
         snap = self.risk.snapshot()
         allowed, why = self.risk.can_trade()
@@ -1635,6 +1681,7 @@ class CommandBot:
             "/pos    — Current open position details\n"
             "/exit   — Close/sell current position\n"
             "/mode   — Toggle DRY-RUN / LIVE\n"
+            "/recover — Find & recover all USDC.e\n"
             "/redeem — Claim winning positions → USDC.e\n"
             "/pause  — 30 min cooldown\n"
             f"{BAR}\n"

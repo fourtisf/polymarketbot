@@ -871,3 +871,130 @@ class Executor:
             log.warning("balance query failed: %s", exc)
             return None
         return None
+
+    async def get_onchain_usdc_balance(self, address: str) -> float:
+        """Get USDC.e balance for any address via raw RPC."""
+        import aiohttp
+        addr_padded = address.lower().replace("0x", "").rjust(64, "0")
+        data = "0x70a08231" + "0" * 24 + addr_padded[-40:]
+        try:
+            async with aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=15)
+            ) as session:
+                result = await self._rpc(session, "eth_call", [
+                    {"to": self.USDC_E, "data": data}, "latest"
+                ])
+                return int(result, 16) / 1e6 if result and result != "0x" else 0.0
+        except Exception as exc:
+            log.warning("get_onchain_usdc_balance(%s) failed: %s", address[:10], exc)
+            return 0.0
+
+    async def cancel_all_open_orders(self) -> int:
+        """Cancel all open CLOB orders to free locked USDC.e."""
+        client = self._init_client()
+        if client is None:
+            return 0
+        try:
+            def _cancel():
+                return client.cancel_all()
+            resp = await asyncio.to_thread(_cancel)
+            if resp:
+                log.info("cancel_all_orders: %s", resp)
+                return 1
+            return 0
+        except Exception as exc:
+            log.warning("cancel_all_orders failed: %s", exc)
+            return 0
+
+    async def get_open_orders(self) -> list:
+        """Get list of open orders from CLOB."""
+        client = self._init_client()
+        if client is None:
+            return []
+        try:
+            def _get():
+                return client.get_orders()
+            orders = await asyncio.to_thread(_get)
+            if orders:
+                return [o for o in orders
+                        if isinstance(o, dict)
+                        and o.get("status") in ("live", "open")]
+            return []
+        except Exception as exc:
+            log.warning("get_open_orders failed: %s", exc)
+            return []
+
+    async def full_balance_recovery(self) -> dict:
+        """
+        Comprehensive balance recovery: check all locations where USDC.e
+        could be stuck and attempt to recover it.
+
+        Returns dict with amounts found at each location.
+        """
+        import aiohttp
+        from eth_account import Account
+
+        acct = Account.from_key(config.POLYGON_PRIVATE_KEY)
+        result = {
+            "eoa_balance": 0.0,
+            "proxy_balance": 0.0,
+            "clob_balance": 0.0,
+            "open_orders": 0,
+            "recovered": 0.0,
+            "actions": [],
+        }
+
+        try:
+            # 1. Check EOA balance
+            eoa_bal = await self.get_onchain_usdc_balance(acct.address)
+            result["eoa_balance"] = eoa_bal
+
+            # 2. Check proxy wallet balance
+            async with aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=15)
+            ) as session:
+                proxy_addr = await self.get_proxy_wallet_address(session)
+            if proxy_addr:
+                proxy_bal = await self.get_onchain_usdc_balance(proxy_addr)
+                result["proxy_balance"] = proxy_bal
+                if proxy_bal > 0.01:
+                    log.info("recovery: proxy has $%.2f — withdrawing", proxy_bal)
+                    tx = await self.withdraw_proxy_usdc()
+                    if tx:
+                        result["recovered"] += proxy_bal
+                        result["actions"].append(
+                            f"Withdrew ${proxy_bal:.2f} from proxy: {tx}")
+
+            # 3. Check CLOB exchange balance
+            clob_bal = await self.get_balance_usdc()
+            if clob_bal is not None:
+                result["clob_balance"] = clob_bal
+
+            # 4. Cancel open orders (free locked USDC)
+            open_orders = await self.get_open_orders()
+            result["open_orders"] = len(open_orders)
+            if open_orders:
+                log.info("recovery: %d open orders — canceling", len(open_orders))
+                await self.cancel_all_open_orders()
+                result["actions"].append(
+                    f"Canceled {len(open_orders)} open orders")
+                # Wait and check if proxy balance increased
+                await asyncio.sleep(3)
+                if proxy_addr:
+                    proxy_bal2 = await self.get_onchain_usdc_balance(proxy_addr)
+                    if proxy_bal2 > 0.01:
+                        tx = await self.withdraw_proxy_usdc()
+                        if tx:
+                            result["recovered"] += proxy_bal2
+                            result["actions"].append(
+                                f"Post-cancel proxy withdraw: ${proxy_bal2:.2f}")
+
+            # 5. Final EOA balance
+            result["eoa_balance"] = await self.get_onchain_usdc_balance(
+                acct.address)
+
+        except Exception as exc:
+            log.exception("full_balance_recovery failed: %s", exc)
+            result["actions"].append(f"Error: {exc}")
+
+        return result

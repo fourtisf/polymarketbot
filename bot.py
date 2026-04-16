@@ -616,12 +616,13 @@ class TradingBot:
         """Periodically sweep USDC.e from proxy wallet to EOA.
 
         Polymarket may auto-redeem winning positions, depositing USDC.e
-        into the proxy wallet. This background task ensures that money
-        is transferred to the EOA every 3 minutes.
+        into the proxy wallet or CLOB exchange balance. This background
+        task ensures money is recovered every 60 seconds.
         """
-        await asyncio.sleep(30)  # Initial delay
+        await asyncio.sleep(20)  # Initial delay
         while not self._stopping:
             try:
+                # 1. Sweep proxy wallet USDC.e
                 tx = await self.executor.withdraw_proxy_usdc()
                 if tx:
                     bal_str = ""
@@ -635,9 +636,36 @@ class TradingBot:
                         f"TX: {tx_link_html(tx)}"
                         f"{bal_str}"
                     )
+
+                # 2. Cancel stale open orders (free locked USDC)
+                try:
+                    open_orders = await self.executor.get_open_orders()
+                    if open_orders:
+                        log.info("sweep: found %d open orders — canceling",
+                                 len(open_orders))
+                        await self.executor.cancel_all_open_orders()
+                        await asyncio.sleep(3)
+                        # Try proxy sweep again after cancel
+                        tx2 = await self.executor.withdraw_proxy_usdc()
+                        if tx2:
+                            bal_str = ""
+                            try:
+                                usdc_bal, _, _ = await fetch_all_usdc(
+                                    config.POLYGON_PUBLIC_KEY)
+                                bal_str = f"\n💵 USDC.e: <b>${usdc_bal:,.2f}</b>"
+                            except Exception:
+                                pass
+                            await self.notifier.send_text(
+                                f"💸 <b>Post-cancel sweep: USDC.e to EOA</b>\n"
+                                f"TX: {tx_link_html(tx2)}"
+                                f"{bal_str}"
+                            )
+                except Exception as exc:
+                    log.debug("sweep cancel-orders: %s", exc)
+
             except Exception as exc:
                 log.debug("proxy sweep: %s", exc)
-            await asyncio.sleep(180)  # Every 3 minutes
+            await asyncio.sleep(60)  # Every 60 seconds (was 180)
 
     async def _auto_redeem(self, condition_id: str,
                           neg_risk: bool = True) -> None:
@@ -692,8 +720,14 @@ class TradingBot:
             except Exception as exc:
                 log.warning("redeem attempt %d/%d failed: %s", attempt + 1, 5, exc)
 
-        # All redeem attempts failed — try proxy USDC withdrawal as fallback
+        # All redeem attempts failed — comprehensive recovery fallback
+        log.info("auto-redeem: all 5 attempts failed — running full recovery")
         try:
+            # Cancel any stale orders that might lock USDC
+            await self.executor.cancel_all_open_orders()
+            await asyncio.sleep(3)
+
+            # Try proxy USDC withdrawal
             withdraw_tx = await self.executor.withdraw_proxy_usdc()
             if withdraw_tx:
                 bal_str = ""
@@ -711,11 +745,21 @@ class TradingBot:
         except Exception as exc:
             log.warning("proxy withdrawal fallback failed: %s", exc)
 
+        # Final: report current balance state
+        try:
+            from eth_account import Account
+            acct = Account.from_key(config.POLYGON_PRIVATE_KEY)
+            eoa_bal = await self.executor.get_onchain_usdc_balance(acct.address)
+            log.info("auto-redeem fallback: EOA balance = $%.2f", eoa_bal)
+        except Exception:
+            pass
+
         log.warning("auto-redeem failed after 5 attempts for condition %s", condition_id[:16])
         await self.notifier.send_text(
             f"⚠️ Auto-redeem failed after 5 attempts.\n"
             f"Condition: <code>{condition_id[:20]}</code>\n"
-            f"Try /redeem or run: python3 scripts/redeem_all.py"
+            f"Proxy sweep runs every 60s — money will be recovered automatically.\n"
+            f"Or try /redeem manually."
         )
 
 
