@@ -1285,17 +1285,6 @@ class CommandBot:
                     f"❌ {window_label_from_slug(slug)} — {str(exc)[:60]}"
                 )
 
-        # Withdraw any USDC.e from proxy wallet to EOA
-        if redeemed > 0:
-            try:
-                w_tx = await self.executor.withdraw_proxy_usdc()
-                if w_tx:
-                    results_lines.append(
-                        f"💵 Proxy USDC withdrawn — {tx_link_html(w_tx)}"
-                    )
-            except Exception as w_exc:
-                log.warning("redeem: proxy withdraw failed: %s", w_exc)
-
         # Get balance after
         try:
             bal_after, _, _ = await fetch_all_usdc(addr)

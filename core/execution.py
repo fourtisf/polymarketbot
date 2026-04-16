@@ -546,11 +546,8 @@ class Executor:
         """
         Redeem resolved conditional tokens back to USDC.e.
 
-        Polymarket holds conditional tokens in a PROXY WALLET (not the EOA).
-        We must call through the ProxyWalletFactory.proxy() function to
-        forward the redeemPositions call from the proxy wallet.
-
-        Flow: EOA -> Factory.proxy([ProxyCall]) -> ProxyWallet -> CTF.redeemPositions()
+        Tokens are held at the EOA (confirmed by diagnostics).
+        Try direct EOA call to redeemPositions on CTF and NegRisk contracts.
         """
         if self.dry_run or not condition_id:
             return None
@@ -563,7 +560,7 @@ class Executor:
         cond_padded = condition_id.lower().replace("0x", "").rjust(64, "0")
         cond_bytes = bytes.fromhex(cond_padded)
 
-        # Build inner redeemPositions calldata for BOTH approaches
+        # Build redeemPositions calldata for BOTH contract types
         # ── 1. NegRisk: redeemPositions(bytes32 conditionId, uint256[] indexSets)
         nr_selector = bytes.fromhex("dbeccb23")
         nr_params = eth_abi.encode(
@@ -580,80 +577,30 @@ class Executor:
         )
         ctf_calldata = ctf_selector + ctf_params
 
-        # Contracts to try redemption against
+        # Try all contracts — direct EOA call (tokens are at EOA)
         attempts = [
+            (self.CTF_CONTRACT, ctf_calldata, "CTF"),
             (self.NEG_RISK_ADAPTER, neg_risk_calldata, "NegRiskAdapter"),
             (self.NEG_RISK_EXCHANGE, neg_risk_calldata, "NegRiskExchange"),
-            (self.CTF_CONTRACT, ctf_calldata, "CTF"),
         ]
-        if not neg_risk:
-            attempts.reverse()
+        if neg_risk:
+            # NegRisk markets: try NegRisk contracts first
+            attempts = [
+                (self.NEG_RISK_ADAPTER, neg_risk_calldata, "NegRiskAdapter"),
+                (self.CTF_CONTRACT, ctf_calldata, "CTF"),
+                (self.NEG_RISK_EXCHANGE, neg_risk_calldata, "NegRiskExchange"),
+            ]
 
-        log.info("redeem: condition=%s neg_risk=%s", condition_id[:16], neg_risk)
-
-        # Factory.proxy() selector = 0x34ee9791
-        # Encodes: proxy((uint8 typeCode, address to, uint256 value, bytes data)[])
-        factory_selector = bytes.fromhex("34ee9791")
+        log.info("redeem: condition=%s neg_risk=%s eoa=%s",
+                 condition_id[:16], neg_risk, acct.address)
 
         async with aiohttp.ClientSession(
             timeout=aiohttp.ClientTimeout(total=60)
         ) as session:
-            # Get proxy wallet address for diagnostics
-            proxy_addr = await self.get_proxy_wallet_address(session)
-            log.info("redeem: proxy_wallet=%s eoa=%s", proxy_addr, acct.address)
-
             for target_contract, inner_calldata, label in attempts:
-                # ── Strategy A: Call through ProxyWalletFactory ──
-                # This makes the proxy wallet (which holds tokens) call redeemPositions
-                if proxy_addr:
-                    factory_params = eth_abi.encode(
-                        ["(uint8,address,uint256,bytes)[]"],
-                        [[(0, target_contract, 0, inner_calldata)]]
-                    )
-                    factory_tx_data = "0x" + (factory_selector + factory_params).hex()
-
-                    log.info("redeem: trying %s via ProxyFactory (target=%s)",
-                             label, target_contract[:10])
-                    try:
-                        est_hex = await self._rpc(session, "eth_estimateGas", [{
-                            "from": acct.address,
-                            "to": self.PROXY_WALLET_FACTORY,
-                            "data": factory_tx_data,
-                        }])
-                        estimated = int(est_hex, 16)
-                        if estimated < 30_000:
-                            log.info("redeem: %s via factory gas=%d (no-op) — skipping",
-                                     label, estimated)
-                        else:
-                            gas_limit = int(estimated * 1.5)
-                            log.info("redeem: %s via factory gas=%d, using %d",
-                                     label, estimated, gas_limit)
-                            nonce = int(await self._rpc(
-                                session, "eth_getTransactionCount",
-                                [acct.address, "latest"]
-                            ), 16)
-                            gas_price = int(await self._rpc(
-                                session, "eth_gasPrice", []
-                            ), 16)
-                            tx_hash = await self._sign_and_send(
-                                session, acct, self.PROXY_WALLET_FACTORY,
-                                factory_tx_data, nonce, gas_price,
-                                gas=gas_limit,
-                            )
-                            if tx_hash:
-                                ok = await self._wait_receipt(session, tx_hash)
-                                log.info("redeem %s via factory tx=%s ok=%s",
-                                         label, tx_hash, ok)
-                                if ok:
-                                    return tx_hash
-                                log.error("redeem %s via factory reverted: %s",
-                                          label, tx_hash)
-                    except Exception as exc:
-                        log.info("redeem: %s via factory failed: %s", label, exc)
-
-                # ── Strategy B: Direct call from EOA (fallback) ──
                 direct_tx_data = "0x" + inner_calldata.hex()
-                log.info("redeem: trying %s direct from EOA", label)
+                log.info("redeem: trying %s direct (contract=%s)",
+                         label, target_contract[:10])
                 try:
                     est_hex = await self._rpc(session, "eth_estimateGas", [{
                         "from": acct.address,
@@ -662,14 +609,15 @@ class Executor:
                     }])
                     estimated = int(est_hex, 16)
                     if estimated < 30_000:
-                        log.info("redeem: %s direct gas=%d (no-op) — skipping",
+                        log.info("redeem: %s gas=%d (too low, no-op) — skipping",
                                  label, estimated)
                         continue
                     gas_limit = int(estimated * 1.5)
-                    log.info("redeem: %s direct gas=%d, using %d",
+                    log.info("redeem: %s gas estimate=%d, using %d",
                              label, estimated, gas_limit)
                 except Exception as est_exc:
-                    log.info("redeem: %s direct gas est failed: %s", label, est_exc)
+                    log.info("redeem: %s gas est failed: %s — skipping",
+                             label, est_exc)
                     continue
 
                 try:
@@ -686,12 +634,14 @@ class Executor:
                     )
                     if tx_hash:
                         ok = await self._wait_receipt(session, tx_hash)
-                        log.info("redeem %s direct tx=%s ok=%s", label, tx_hash, ok)
+                        log.info("redeem %s tx=%s ok=%s", label, tx_hash, ok)
                         if ok:
                             return tx_hash
-                        log.error("redeem %s direct reverted: %s", label, tx_hash)
+                        log.error("redeem %s TX reverted: %s", label, tx_hash)
+                    else:
+                        log.error("redeem %s: sign_and_send returned None", label)
                 except Exception as exc:
-                    log.exception("redeem %s direct failed: %s", label, exc)
+                    log.exception("redeem %s failed: %s", label, exc)
 
         log.warning("redeem: all approaches failed for condition %s", condition_id[:16])
         return None

@@ -581,14 +581,7 @@ class TradingBot:
                     condition_id, neg_risk=neg_risk
                 )
                 if tx_hash:
-                    # Withdraw USDC from proxy wallet to EOA
-                    try:
-                        w_tx = await self.executor.withdraw_proxy_usdc()
-                        if w_tx:
-                            log.info("proxy USDC withdrawn: %s", w_tx)
-                    except Exception as w_exc:
-                        log.warning("proxy USDC withdraw failed: %s", w_exc)
-                    # Fetch new balance after redeem + withdraw
+                    # Fetch new balance after redeem
                     bal_str = ""
                     try:
                         usdc_bal, _, _ = await fetch_all_usdc(config.POLYGON_PUBLIC_KEY)
