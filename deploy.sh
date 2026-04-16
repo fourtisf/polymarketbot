@@ -3,7 +3,7 @@
 # Usage: bash deploy.sh
 set -e
 
-BRANCH="claude/poly-marketbot-investigation-MDuYT"
+BRANCH="claude/initial-setup-W6OxR"
 BOT_DIR="/root/polymarket-5m-bot"
 PM2_NAME="polymarket-bot"
 
