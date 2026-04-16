@@ -1213,11 +1213,13 @@ class CommandBot:
                 continue
             seen_slugs.add(slug)
 
-            # Look up conditionId via Gamma API
-            cond_id = await self._gamma_condition_id(slug)
-            if not cond_id:
+            # Look up conditionId + neg_risk via Gamma API
+            info = await self._gamma_market_info(slug)
+            if not info or not info.get("condition_id"):
                 skipped += 1
                 continue
+            cond_id = info["condition_id"]
+            neg_risk = info.get("neg_risk", True)
             if cond_id in seen_conditions:
                 continue
             seen_conditions.add(cond_id)
@@ -1225,9 +1227,10 @@ class CommandBot:
             # Update status
             if status_msg_id:
                 try:
+                    nr_tag = " (NegRisk)" if neg_risk else ""
                     await self.notifier.edit_text(
                         chat_id, status_msg_id,
-                        f"🔄 Redeeming <b>{slug}</b>...\n"
+                        f"🔄 Redeeming <b>{slug}</b>{nr_tag}...\n"
                         f"({redeemed} done, {len(seen_slugs)}/{len(wins)} checked)"
                     )
                 except Exception:
@@ -1235,7 +1238,9 @@ class CommandBot:
 
             # Try to redeem
             try:
-                tx_hash = await self.executor.redeem_positions(cond_id)
+                tx_hash = await self.executor.redeem_positions(
+                    cond_id, neg_risk=neg_risk
+                )
                 if tx_hash:
                     redeemed += 1
                     results_lines.append(
@@ -1283,8 +1288,8 @@ class CommandBot:
             await self.notifier.send_text(text, chat_id=chat_id)
 
     @staticmethod
-    async def _gamma_condition_id(slug: str) -> Optional[str]:
-        """Look up conditionId from Gamma API by market slug."""
+    async def _gamma_market_info(slug: str) -> Optional[Dict[str, Any]]:
+        """Look up conditionId and neg_risk from Gamma API by market slug."""
         url = f"{config.GAMMA_HOST}/markets"
         params = {"slug": slug}
         try:
@@ -1298,11 +1303,10 @@ class CommandBot:
             markets = data if isinstance(data, list) else data.get("data", [])
             if not markets:
                 return None
-            return (
-                markets[0].get("conditionId")
-                or markets[0].get("condition_id")
-                or ""
-            )
+            m = markets[0]
+            cond = m.get("conditionId") or m.get("condition_id") or ""
+            neg_risk = bool(m.get("negRisk") or m.get("neg_risk"))
+            return {"condition_id": cond, "neg_risk": neg_risk}
         except Exception:
             return None
 

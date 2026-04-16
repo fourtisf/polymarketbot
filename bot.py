@@ -545,7 +545,7 @@ class TradingBot:
         log.info("redeem check: win=%s condition_id=%s dry_run=%s",
                  win, w.condition_id[:16] if w.condition_id else "EMPTY", self.dry_run)
         if win and w.condition_id and not self.dry_run:
-            asyncio.create_task(self._auto_redeem(w.condition_id))
+            asyncio.create_task(self._auto_redeem(w.condition_id, w.neg_risk))
         elif win and not w.condition_id:
             log.error("WIN but no condition_id — cannot auto-redeem! slug=%s", w.slug)
             await self.notifier.send_text(
@@ -563,7 +563,8 @@ class TradingBot:
         self.state.entry_record = None
         self.state.entered_this_window = False
 
-    async def _auto_redeem(self, condition_id: str) -> None:
+    async def _auto_redeem(self, condition_id: str,
+                          neg_risk: bool = True) -> None:
         """Redeem winning conditional tokens → USDC.e with retries.
 
         The on-chain oracle may take a few seconds to report the resolution,
@@ -573,7 +574,9 @@ class TradingBot:
             # Wait for oracle to report on-chain resolution
             await asyncio.sleep(10 + attempt * 15)
             try:
-                tx_hash = await self.executor.redeem_positions(condition_id)
+                tx_hash = await self.executor.redeem_positions(
+                    condition_id, neg_risk=neg_risk
+                )
                 if tx_hash:
                     # Fetch new balance after redeem
                     bal_str = ""

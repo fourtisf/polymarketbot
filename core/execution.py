@@ -103,6 +103,8 @@ class Executor:
     # Polymarket exchange contracts that need USDC.e spending approval
     USDC_E = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
     CTF_CONTRACT = "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045"
+    NEG_RISK_ADAPTER = "0xd91E80cF2E7be2e162c6513ceD06f1dD0dA35296"
+    NEG_RISK_EXCHANGE = "0xC5d563A36AE78145C45a50134d48A1215220f80a"
     EXCHANGE_SPENDERS = [
         "0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E",  # CTF Exchange
         "0xC5d563A36AE78145C45a50134d48A1215220f80a",  # NegRisk CTF Exchange
@@ -498,11 +500,17 @@ class Executor:
         except Exception as exc:
             log.warning("cancel_all failed: %s", exc)
 
-    async def redeem_positions(self, condition_id: str) -> Optional[str]:
+    async def redeem_positions(self, condition_id: str,
+                              neg_risk: bool = True) -> Optional[str]:
         """
         Redeem resolved conditional tokens back to USDC.e.
-        Calls redeemPositions on the CTF contract.
-        Returns tx hash on success, None on failure.
+
+        Polymarket has TWO redemption paths:
+        1. Standard CTF: tokens are in user's wallet → CTF.redeemPositions()
+        2. NegRisk: tokens are in NegRiskAdapter → NegRiskAdapter.redeemPositions()
+
+        BTC 5-minute markets are typically NegRisk. We try NegRisk first,
+        then fall back to CTF.
         """
         if self.dry_run or not condition_id:
             return None
@@ -511,72 +519,105 @@ class Executor:
         from eth_account import Account
 
         acct = Account.from_key(config.POLYGON_PRIVATE_KEY)
-        # redeemPositions(address collateralToken, bytes32 parentCollectionId,
-        #                 bytes32 conditionId, uint256[] indexSets)
-        # Function selector: keccak256("redeemPositions(address,bytes32,bytes32,uint256[])")
-        # We compute it at call time to avoid hardcoding errors
+        cond_padded = condition_id.lower().replace("0x", "").rjust(64, "0")
+
+        # Build calldata for BOTH approaches
+        # ── 1. NegRisk Adapter: redeemPositions(bytes32 conditionId, uint256[] indexSets)
+        neg_risk_selector = "dbeccb23"  # keccak256("redeemPositions(bytes32,uint256[])")[:8]
         try:
             from eth_hash.auto import keccak as _keccak
-            selector = _keccak(b"redeemPositions(address,bytes32,bytes32,uint256[])").hex()[:8]
+            neg_risk_selector = _keccak(
+                b"redeemPositions(bytes32,uint256[])"
+            ).hex()[:8]
         except ImportError:
-            selector = "01a18627"  # known Gnosis CTF selector
+            pass
+        # ABI: conditionId(32) + offset_to_array(32) + array_len(32) + [1, 2]
+        nr_offset = "0" * 62 + "40"   # 0x40 = 64 (2 params × 32 bytes)
+        nr_len = "0" * 63 + "2"
+        nr_idx0 = "0" * 63 + "1"
+        nr_idx1 = "0" * 63 + "2"
+        neg_risk_data = ("0x" + neg_risk_selector + cond_padded +
+                         nr_offset + nr_len + nr_idx0 + nr_idx1)
 
+        # ── 2. Standard CTF: redeemPositions(address, bytes32, bytes32, uint256[])
+        ctf_selector = "01b7037c"  # keccak256("redeemPositions(address,bytes32,bytes32,uint256[])")[:8]
+        try:
+            from eth_hash.auto import keccak as _keccak
+            ctf_selector = _keccak(
+                b"redeemPositions(address,bytes32,bytes32,uint256[])"
+            ).hex()[:8]
+        except ImportError:
+            pass
         usdc_e_padded = self.USDC_E.lower().replace("0x", "").rjust(64, "0")
-        parent_collection = "0" * 64  # bytes32(0)
-        cond_padded = condition_id.lower().replace("0x", "").rjust(64, "0")
-        # offset to dynamic array (4 params × 32 bytes = 128 = 0x80)
-        array_offset = "0" * 62 + "80"  # hex 128 = 64 hex chars
-        # array length = 2
-        array_len = "0" * 63 + "2"
-        # indexSet[0] = 1 (first outcome), indexSet[1] = 2 (second outcome)
-        idx_0 = "0" * 63 + "1"
-        idx_1 = "0" * 63 + "2"
+        parent = "0" * 64
+        ctf_offset = "0" * 62 + "80"   # 0x80 = 128 (4 params × 32 bytes)
+        ctf_len = "0" * 63 + "2"
+        ctf_idx0 = "0" * 63 + "1"
+        ctf_idx1 = "0" * 63 + "2"
+        ctf_data = ("0x" + ctf_selector + usdc_e_padded + parent + cond_padded +
+                    ctf_offset + ctf_len + ctf_idx0 + ctf_idx1)
 
-        tx_data = "0x" + selector + usdc_e_padded + parent_collection + cond_padded + \
-                  array_offset + array_len + idx_0 + idx_1
+        # Order: try NegRisk first (most Polymarket markets), then CTF
+        attempts = [
+            (self.NEG_RISK_ADAPTER, neg_risk_data, "NegRiskAdapter"),
+            (self.CTF_CONTRACT, ctf_data, "CTF"),
+        ]
+        if not neg_risk:
+            attempts.reverse()  # Try CTF first if explicitly non-NegRisk
 
-        log.info("redeem: condition_id=%s selector=%s data_len=%d",
-                 condition_id[:16], selector, len(tx_data))
+        log.info("redeem: condition=%s neg_risk=%s", condition_id[:16], neg_risk)
 
         async with aiohttp.ClientSession(
             timeout=aiohttp.ClientTimeout(total=60)
         ) as session:
-            try:
-                # Estimate gas — if this fails, there's nothing to redeem
-                # (condition not resolved or no tokens held)
+            for target_contract, tx_data, label in attempts:
+                log.info("redeem: trying %s (contract=%s, data_len=%d)",
+                         label, target_contract[:10], len(tx_data))
                 try:
                     est_hex = await self._rpc(session, "eth_estimateGas", [{
                         "from": acct.address,
-                        "to": self.CTF_CONTRACT,
+                        "to": target_contract,
                         "data": tx_data,
                     }])
                     estimated = int(est_hex, 16)
-                    gas_limit = int(estimated * 1.5)  # 50% buffer
-                    log.info("redeem: estimated gas=%d, using %d", estimated, gas_limit)
+                    # Skip if gas is very low (< 30k) — likely a no-op
+                    if estimated < 30_000:
+                        log.info("redeem: %s gas=%d (too low, likely no-op) — skipping",
+                                 label, estimated)
+                        continue
+                    gas_limit = int(estimated * 1.5)
+                    log.info("redeem: %s gas estimate=%d, using %d",
+                             label, estimated, gas_limit)
                 except Exception as est_exc:
-                    log.info("redeem: gas estimate failed — nothing to redeem or "
-                             "not yet resolved: %s", est_exc)
-                    return None
+                    log.info("redeem: %s gas estimate failed: %s", label, est_exc)
+                    continue  # Try next approach
 
-                nonce = int(await self._rpc(session, "eth_getTransactionCount",
-                                            [acct.address, "latest"]), 16)
-                gas_price_hex = await self._rpc(session, "eth_gasPrice", [])
-                gas_price = int(gas_price_hex, 16)
+                # Gas estimation passed with meaningful gas — proceed with TX
+                try:
+                    nonce = int(await self._rpc(
+                        session, "eth_getTransactionCount",
+                        [acct.address, "latest"]
+                    ), 16)
+                    gas_price = int(await self._rpc(
+                        session, "eth_gasPrice", []
+                    ), 16)
 
-                tx_hash = await self._sign_and_send(
-                    session, acct, self.CTF_CONTRACT, tx_data, nonce, gas_price,
-                    gas=gas_limit,
-                )
-                if tx_hash:
-                    ok = await self._wait_receipt(session, tx_hash)
-                    log.info("redeem tx=%s ok=%s", tx_hash, ok)
-                    if not ok:
-                        log.error("redeem TX reverted: %s", tx_hash)
-                    return tx_hash if ok else None
-                else:
-                    log.error("redeem: sign_and_send returned None")
-            except Exception as exc:
-                log.exception("redeem failed: %s", exc)
+                    tx_hash = await self._sign_and_send(
+                        session, acct, target_contract, tx_data,
+                        nonce, gas_price, gas=gas_limit,
+                    )
+                    if tx_hash:
+                        ok = await self._wait_receipt(session, tx_hash)
+                        log.info("redeem %s tx=%s ok=%s", label, tx_hash, ok)
+                        if ok:
+                            return tx_hash
+                        log.error("redeem %s TX reverted: %s", label, tx_hash)
+                    else:
+                        log.error("redeem %s: sign_and_send returned None", label)
+                except Exception as exc:
+                    log.exception("redeem %s failed: %s", label, exc)
+
+        log.warning("redeem: all approaches failed for condition %s", condition_id[:16])
         return None
 
     async def get_balance_usdc(self) -> Optional[float]:
