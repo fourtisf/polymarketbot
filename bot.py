@@ -543,6 +543,10 @@ class TradingBot:
         self.dashboard.broadcast("trade", rec_final)
         self.dashboard.broadcast("stats", {"pnl": pnl})
 
+        # Auto-redeem winning conditional tokens back to USDC.e
+        if win and w.condition_id and not self.dry_run:
+            asyncio.create_task(self._auto_redeem(w.condition_id))
+
         # Check auto-pause conditions
         allowed, why = self.risk.can_trade()
         if not allowed:
@@ -552,6 +556,37 @@ class TradingBot:
         self.state.window = None
         self.state.entry_record = None
         self.state.entered_this_window = False
+
+    async def _auto_redeem(self, condition_id: str) -> None:
+        """Redeem winning conditional tokens → USDC.e with retries.
+
+        The on-chain oracle may take a few seconds to report the resolution,
+        so we retry up to 3 times with increasing delays.
+        """
+        for attempt in range(3):
+            # Wait for oracle to report on-chain resolution
+            await asyncio.sleep(10 + attempt * 15)
+            try:
+                tx_hash = await self.executor.redeem_positions(condition_id)
+                if tx_hash:
+                    # Fetch new balance after redeem
+                    bal_str = ""
+                    try:
+                        from utils.telegram import fetch_balances
+                        usdc_bal, _ = await fetch_balances(config.POLYGON_PUBLIC_KEY)
+                        bal_str = f"\n💵 USDC.e: <b>${usdc_bal:,.2f}</b>"
+                    except Exception:
+                        pass
+                    await self.notifier.send_text(
+                        f"💰 <b>Tokens redeemed</b>\n"
+                        f"TX: {tx_link_html(tx_hash)}"
+                        f"{bal_str}"
+                    )
+                    return
+                log.info("redeem attempt %d: no tx (oracle may not have reported yet)", attempt + 1)
+            except Exception as exc:
+                log.warning("redeem attempt %d failed: %s", attempt + 1, exc)
+        log.warning("auto-redeem failed after 3 attempts for condition %s", condition_id[:16])
 
 
 # ─────────────────────────────────────────────────────────────

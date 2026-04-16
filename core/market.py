@@ -33,6 +33,8 @@ class Window:
     slug: str = ""
     token_up_id: str = ""
     token_down_id: str = ""
+    condition_id: str = ""  # CTF conditionId for redemption
+    neg_risk: bool = False  # True if market uses NegRisk contracts
     price_to_beat: Optional[float] = None
     price_source: str = ""  # "chainlink" or "binance-fallback"
     resolution: Optional[str] = None  # "UP" | "DOWN" after settle
@@ -126,7 +128,14 @@ async def fetch_market_tokens(slug: str) -> Optional[Dict[str, str]]:
         # Fallback: assume first is UP, second is DOWN
         up_id = clob_ids[0]
         down_id = clob_ids[1]
-    return {"up": up_id, "down": down_id}
+    condition_id = market.get("conditionId") or market.get("condition_id") or ""
+    neg_risk = bool(market.get("negRisk") or market.get("neg_risk"))
+    return {
+        "up": up_id,
+        "down": down_id,
+        "condition_id": condition_id,
+        "neg_risk": neg_risk,
+    }
 
 
 async def resolve_window_metadata(window: Window) -> bool:
@@ -136,4 +145,6 @@ async def resolve_window_metadata(window: Window) -> bool:
         return False
     window.token_up_id = tokens["up"]
     window.token_down_id = tokens["down"]
+    window.condition_id = tokens.get("condition_id", "")
+    window.neg_risk = tokens.get("neg_risk", False)
     return True

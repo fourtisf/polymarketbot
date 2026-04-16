@@ -497,6 +497,63 @@ class Executor:
         except Exception as exc:
             log.warning("cancel_all failed: %s", exc)
 
+    async def redeem_positions(self, condition_id: str) -> Optional[str]:
+        """
+        Redeem resolved conditional tokens back to USDC.e.
+        Calls redeemPositions on the CTF contract.
+        Returns tx hash on success, None on failure.
+        """
+        if self.dry_run or not condition_id:
+            return None
+
+        import aiohttp
+        from eth_account import Account
+
+        acct = Account.from_key(config.POLYGON_PRIVATE_KEY)
+        # redeemPositions(address collateralToken, bytes32 parentCollectionId,
+        #                 bytes32 conditionId, uint256[] indexSets)
+        # Function selector: keccak256("redeemPositions(address,bytes32,bytes32,uint256[])")
+        # We compute it at call time to avoid hardcoding errors
+        try:
+            from eth_hash.auto import keccak as _keccak
+            selector = _keccak(b"redeemPositions(address,bytes32,bytes32,uint256[])").hex()[:8]
+        except ImportError:
+            selector = "01a18627"  # known Gnosis CTF selector
+
+        usdc_e_padded = self.USDC_E.lower().replace("0x", "").rjust(64, "0")
+        parent_collection = "0" * 64  # bytes32(0)
+        cond_padded = condition_id.lower().replace("0x", "").rjust(64, "0")
+        # offset to dynamic array (4 params × 32 bytes = 128 = 0x80)
+        array_offset = "0" * 63 + "80"  # hex 128
+        # array length = 2
+        array_len = "0" * 63 + "2"
+        # indexSet[0] = 1 (first outcome), indexSet[1] = 2 (second outcome)
+        idx_0 = "0" * 63 + "1"
+        idx_1 = "0" * 63 + "2"
+
+        tx_data = "0x" + selector + usdc_e_padded + parent_collection + cond_padded + \
+                  array_offset + array_len + idx_0 + idx_1
+
+        async with aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=30)
+        ) as session:
+            try:
+                nonce = int(await self._rpc(session, "eth_getTransactionCount",
+                                            [acct.address, "latest"]), 16)
+                gas_price_hex = await self._rpc(session, "eth_gasPrice", [])
+                gas_price = int(gas_price_hex, 16)
+
+                tx_hash = await self._sign_and_send(
+                    session, acct, self.CTF_CONTRACT, tx_data, nonce, gas_price
+                )
+                if tx_hash:
+                    ok = await self._wait_receipt(session, tx_hash)
+                    log.info("redeem tx=%s ok=%s", tx_hash, ok)
+                    return tx_hash if ok else None
+            except Exception as exc:
+                log.warning("redeem failed: %s", exc)
+        return None
+
     async def get_balance_usdc(self) -> Optional[float]:
         """Query on-chain USDC balance via CLOB client."""
         client = self._init_client()
