@@ -374,10 +374,14 @@ class TradingBot:
         best_ask = fresh_ask if fresh_ask and fresh_ask > 0 else decision.token_price
         best_ask = round(max(0.01, best_ask), 2)
 
-        # CRITICAL: Re-check price gate with FRESH price (strategy used stale price)
-        if best_ask >= 0.55:
-            log.warning("fresh price $%.2f >= 0.55 — skipping (was $%.2f at strategy time)",
-                        best_ask, decision.token_price)
+        # CRITICAL: Re-check price gate with FRESH price (strategy used stale price).
+        # Cap matches strategy's ABSOLUTE_MAX_PRICE so the cross-spread ladder in
+        # core/execution.py has matching headroom — anything tighter would let the
+        # strategy approve trades the executor can never fill.
+        from core.strategy import ABSOLUTE_MAX_PRICE as _STRATEGY_MAX_PRICE
+        if best_ask >= _STRATEGY_MAX_PRICE:
+            log.warning("fresh price $%.2f >= cap $%.2f — skipping (was $%.2f at strategy time)",
+                        best_ask, _STRATEGY_MAX_PRICE, decision.token_price)
             self.state.entered_this_window = True
             await self._log_skip(None, {"skip_reason": f"fresh_price_too_high:{best_ask}"})
             return

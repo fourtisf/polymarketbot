@@ -72,20 +72,27 @@ STARTING_BALANCE = _env_float("STARTING_BALANCE", 200.0)
 
 # ─────────────────────────────────────────────────────────────
 # Trading parameters
+#
+# Defaults tuned for validation phase: small size, tight loss limits,
+# strict signal selection. Override any of these via .env once the
+# strategy is shown to be EV+ on a real sample (≥200 settled trades).
 # ─────────────────────────────────────────────────────────────
-BASE_TRADE_SIZE_USD = _env_float("BASE_TRADE_SIZE", 5.0)
-MAX_TRADE_SIZE_USD = _env_float("MAX_TRADE_SIZE", 25.0)
-MIN_TRADE_SIZE_USD = 5.0
+BASE_TRADE_SIZE_USD = _env_float("BASE_TRADE_SIZE", 3.0)
+MAX_TRADE_SIZE_USD = _env_float("MAX_TRADE_SIZE", 10.0)
+MIN_TRADE_SIZE_USD = 3.0
 
-MAX_SESSION_LOSS_USD = _env_float("MAX_SESSION_LOSS", 20.0)
-MAX_DAILY_LOSS_USD = _env_float("MAX_DAILY_LOSS", 30.0)
-MAX_DAILY_TRADES = _env_int("MAX_DAILY_TRADES", 50)
-MAX_CONSECUTIVE_LOSSES = _env_int("MAX_CONSECUTIVE_LOSSES", 4)
+MAX_SESSION_LOSS_USD = _env_float("MAX_SESSION_LOSS", 10.0)
+MAX_DAILY_LOSS_USD = _env_float("MAX_DAILY_LOSS", 15.0)
+MAX_DAILY_TRADES = _env_int("MAX_DAILY_TRADES", 30)
+MAX_CONSECUTIVE_LOSSES = _env_int("MAX_CONSECUTIVE_LOSSES", 3)
 COOLDOWN_AFTER_LOSS_STREAK_SEC = 600
 COOLDOWN_AFTER_BIG_LOSS_SEC = 900
 
-MIN_CONFIDENCE = _env_int("MIN_CONFIDENCE", 65)
-MIN_DELTA_PCT = _env_float("MIN_DELTA_PCT", 0.08)
+# Tighter signal thresholds reduce trade frequency but improve average
+# quality. Once we have ≥200 settled trades we should re-tune these
+# from the bucketed replay report.
+MIN_CONFIDENCE = _env_int("MIN_CONFIDENCE", 75)
+MIN_DELTA_PCT = _env_float("MIN_DELTA_PCT", 0.12)
 
 ENTRY_WINDOW_START_SEC = _env_int("ENTRY_WINDOW_START", 30)  # T-30s begin
 ENTRY_WINDOW_END_SEC = _env_int("ENTRY_WINDOW_END", 8)       # T-8s last chance

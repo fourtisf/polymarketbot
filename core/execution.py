@@ -4,11 +4,15 @@ Order execution via py-clob-client.
 Wraps CLOB client in an async-friendly interface. The underlying SDK is
 sync, so we call it via asyncio.to_thread().
 
-The fill strategy:
-  1. Post GTC at best_ask — should cross the spread for immediate fill
-  2. Poll order status for up to 6s to catch delayed matches
-  3. If still unfilled, cancel + repost at best_ask + 0.01 (taker)
-  4. Poll for 4s more, then give up
+The fill strategy (cross-spread ladder, 4 attempts, ~7s budget):
+  1. Post GTC at best_ask + 0.01 — cross spread for immediate match
+  2. Poll order status (0.5s interval) for up to 2.0s
+  3. If still unfilled, cancel + repost at best_ask + 0.03
+  4. Repeat at +0.05, then +0.07 — capped at ABSOLUTE_MAX_PRICE (0.62)
+
+Tunable knobs are at module level so the operator can tune via code or
+expose them through config later. The ladder must finish well within
+the entry window (T-30s → T-8s = 22s of opportunity).
 """
 
 import asyncio
@@ -20,6 +24,31 @@ from typing import List, Optional
 import config
 
 log = logging.getLogger("execution")
+
+
+# ─────────────────────────────────────────────────────────────
+# Execution tuning constants
+# ─────────────────────────────────────────────────────────────
+
+# Price cap for cross-spread ladder. Matches strategy.ABSOLUTE_MAX_PRICE
+# so we never accidentally pay more than the strategy was willing to
+# stake on at decision time. Raising this changes break-even win rate.
+EXECUTION_MAX_PRICE = 0.62
+
+# Cents to add at each attempt vs the original best_ask. A wider step
+# crosses the spread harder and converts more orders to immediate fills,
+# at the cost of paying a slightly higher entry price. Empirically the
+# 5-min book moves 1-3 cents during a 22s window, so the early steps must
+# be aggressive enough to catch up.
+LADDER_STEPS = (0.01, 0.03, 0.05, 0.07)
+
+# Per-attempt fill-poll timeout. Each attempt cancels at the end if not
+# filled, so total wall-clock budget = sum(POLL_TIMEOUTS) + post latency.
+POLL_TIMEOUTS = (2.0, 1.5, 1.5, 1.0)  # total 6.0s polling
+
+# How fast to poll for fills. The previous 2.0s wasted half of every
+# attempt's budget. 0.5s is fast enough to catch fills in a 22s window.
+POLL_SLEEP_SEC = 0.5
 
 
 @dataclass
@@ -295,13 +324,17 @@ class Executor:
     ) -> FillResult:
         """
         Place a limit BUY for `size_usd` worth of shares at `price`.
-        `price` should be the current best_ask. The method posts at
-        that price to cross the spread, then polls for fills. If not
-        filled, escalates to taker pricing.
+
+        `price` should be the freshly-fetched best_ask. We post immediately
+        at price+LADDER_STEPS[0] to cross the spread (Polymarket has no
+        taker fee, so there is no cost to crossing). If the post or the
+        subsequent poll does not fill within POLL_TIMEOUTS[i] seconds, we
+        cancel and re-post at the next ladder step. We never exceed
+        EXECUTION_MAX_PRICE.
         """
         shares = max(5, int(size_usd / max(price, 0.01)))
         log.info(
-            "entry: token=%s price=%.3f size=$%.2f (%d sh) conf=%d",
+            "entry: token=%s base_price=%.3f size=$%.2f (%d sh) conf=%d",
             token_id[:10], price, size_usd, shares, confidence,
         )
         if self.dry_run:
@@ -312,43 +345,44 @@ class Executor:
                 avg_price=price,
             )
 
-        # Attempt 1: post at best_ask (should cross the spread)
-        fill = await self._try_post(token_id, price, shares)
-        if self._is_balance_error(fill.error):
-            return fill
-        if fill.success and fill.filled_shares > 0:
-            return fill
+        ladder_start = time.monotonic()
+        last_fill: Optional[FillResult] = None
 
-        # Order is live but not yet matched — poll for delayed fills
-        if fill.order_id:
-            polled = await self._poll_order_fills(fill.order_id, price, timeout=6)
-            if polled.filled_shares > 0:
-                return polled
-            await self._cancel(fill.order_id)
+        for attempt, (bump, timeout) in enumerate(
+            zip(LADDER_STEPS, POLL_TIMEOUTS), start=1
+        ):
+            attempt_price = round(price + bump, 2)
+            if attempt_price > EXECUTION_MAX_PRICE:
+                log.info("ladder cap hit: $%.3f > $%.3f (skipping attempt %d)",
+                         attempt_price, EXECUTION_MAX_PRICE, attempt)
+                break
 
-        # Attempt 2: taker at best_ask + 0.01
-        fill2 = await self._try_post(token_id, price + 0.01, shares)
-        if self._is_balance_error(fill2.error):
-            return fill2
-        if fill2.success and fill2.filled_shares > 0:
-            return fill2
+            fill = await self._try_post(token_id, attempt_price, shares)
+            last_fill = fill
+            elapsed = time.monotonic() - ladder_start
+            log.info("ladder attempt %d/%d: price=$%.3f elapsed=%.2fs "
+                     "ok=%s filled=%.1f order=%s err=%s",
+                     attempt, len(LADDER_STEPS), attempt_price, elapsed,
+                     fill.success, fill.filled_shares,
+                     (fill.order_id or "")[:10], fill.error or "-")
 
-        if fill2.order_id:
-            polled = await self._poll_order_fills(fill2.order_id, price + 0.01, timeout=4)
-            if polled.filled_shares > 0:
-                return polled
-            await self._cancel(fill2.order_id)
+            if self._is_balance_error(fill.error):
+                # Balance/allowance won't resolve via retries; fail fast.
+                return fill
+            if fill.success and fill.filled_shares > 0:
+                return fill
 
-        # Attempt 3: deep taker at best_ask + 0.02
-        fill3 = await self._try_post(token_id, price + 0.02, shares)
-        if self._is_balance_error(fill3.error):
-            return fill3
-        if fill3.success and fill3.filled_shares > 0:
-            return fill3
-        if fill3.order_id:
-            await self._cancel(fill3.order_id)
+            # Order accepted but not yet matched — poll briefly for fills.
+            if fill.order_id:
+                polled = await self._poll_order_fills(
+                    fill.order_id, attempt_price, timeout=timeout
+                )
+                if polled.filled_shares > 0:
+                    return polled
+                await self._cancel(fill.order_id)
 
-        return FillResult(success=False, error="not filled after retries")
+        last_err = last_fill.error if last_fill and last_fill.error else "no fill"
+        return FillResult(success=False, error=f"not filled after retries ({last_err})")
 
     @staticmethod
     def _is_balance_error(error: str) -> bool:
@@ -368,7 +402,7 @@ class Executor:
 
         deadline = time.time() + timeout
         while time.time() < deadline:
-            await asyncio.sleep(2)
+            await asyncio.sleep(POLL_SLEEP_SEC)
             try:
                 resp = await asyncio.to_thread(client.get_order, order_id)
                 if not isinstance(resp, dict):

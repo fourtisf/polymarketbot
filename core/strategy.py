@@ -145,11 +145,15 @@ def calculate_confidence(
 
 
 def _size_multiplier_for_score(score: int) -> float:
-    if score >= 90:
-        return 2.0
-    if score >= 78:
-        return 1.5
-    if score >= 65:
+    """Convert confidence score → position-size multiplier.
+
+    Capped at 1.0 in validation phase: scaling up on confidence requires
+    a calibrated win-rate-vs-score curve, which only the replay report
+    (after ≥200 settled trades) can produce. Until then, scaling up is
+    just amplifying potential losses. Re-introduce 1.5x / 2.0x tiers
+    only after the per-bucket edge is empirically positive.
+    """
+    if score >= config.RUNTIME.min_confidence:
         return 1.0
     return 0.0
 
