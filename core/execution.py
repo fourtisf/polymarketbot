@@ -17,6 +17,7 @@ the entry window (T-30s → T-8s = 22s of opportunity).
 
 import asyncio
 import logging
+import random
 import time
 from dataclasses import dataclass, field
 from typing import List, Optional
@@ -49,6 +50,14 @@ POLL_TIMEOUTS = (2.0, 1.5, 1.5, 1.0)  # total 6.0s polling
 # How fast to poll for fills. The previous 2.0s wasted half of every
 # attempt's budget. 0.5s is fast enough to catch fills in a 22s window.
 POLL_SLEEP_SEC = 0.5
+
+# Probabilistic fill probability per ladder step in dry-run mode.
+# Calibrated to roughly match observed live fill rates: a small +0.01
+# bump fills sometimes, deeper bumps fill almost always. This stops
+# dry-run from being naively optimistic (always 100% fill) and lets
+# the simulation actually predict whether the strategy survives the
+# real-world unfilled-order tax.
+DRY_RUN_LADDER_FILL_PROBS = (0.50, 0.78, 0.92, 0.98)
 
 
 @dataclass
@@ -359,12 +368,30 @@ class Executor:
         )
         self.placed_count += 1
         if self.dry_run:
-            self.filled_count += 1
+            # Probabilistic fill simulation. Walk the same ladder as live
+            # would; at each step roll the dice using the calibrated
+            # probability. If the bumped price exceeds EXECUTION_MAX_PRICE,
+            # ladder is exhausted and the order does not fill — same
+            # behaviour as the live ladder hitting the cap.
+            for bump, fill_prob in zip(LADDER_STEPS, DRY_RUN_LADDER_FILL_PROBS):
+                attempt_price = round(price + bump, 2)
+                if attempt_price > EXECUTION_MAX_PRICE:
+                    break
+                if random.random() < fill_prob:
+                    self._record_fill(attempts=1)
+                    log.info("dry-run FILL: token=%s price=$%.3f (sim ladder)",
+                             token_id[:10], attempt_price)
+                    return FillResult(
+                        success=True,
+                        order_id=f"dry-{int(time.time()*1000)}",
+                        filled_shares=shares,
+                        avg_price=attempt_price,
+                    )
+            log.info("dry-run NO FILL: token=%s ladder exhausted (sim)",
+                     token_id[:10])
             return FillResult(
-                success=True,
-                order_id=f"dry-{int(time.time()*1000)}",
-                filled_shares=shares,
-                avg_price=price,
+                success=False,
+                error="dry-run: ladder exhausted (simulated)",
             )
 
         ladder_start = time.monotonic()

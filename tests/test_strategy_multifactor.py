@@ -172,6 +172,10 @@ class FillRateMetricsTests(unittest.TestCase):
         self.assertEqual(snap["fill_rate"], 0.0)
 
     def test_dry_run_increments_both_counters(self):
+        # Seed random so the probabilistic dry-run ladder always fills
+        # at the first step in this test.
+        import random as _r
+        _r.seed(0)
         exe = Executor(dry_run=True)
         asyncio.run(exe.place_limit_buy(
             token_id="tok", price=0.45, size_usd=5.0, confidence=80))

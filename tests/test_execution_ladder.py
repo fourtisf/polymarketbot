@@ -168,13 +168,35 @@ class LadderTests(unittest.TestCase):
 
     # ── Dry-run path ────────────────────────────────────────
 
-    def test_dry_run_does_not_post(self):
+    def test_dry_run_does_not_post_when_ladder_fills(self):
+        # Patch random to always return 0.0 → first ladder step (50%
+        # fill prob) always succeeds. Verifies dry-run never touches the
+        # network when a simulated fill succeeds.
+        from unittest.mock import patch
         exe = _StubExecutor(post_results=[])
         exe.dry_run = True
-        out = self._run(exe, price=0.45, size_usd=5.0)
+        with patch("core.execution.random.random", return_value=0.0):
+            out = self._run(exe, price=0.45, size_usd=5.0)
         self.assertTrue(out.success)
         self.assertGreater(out.filled_shares, 0)
         self.assertEqual(len(exe.posts), 0)
+        # First ladder step = price + LADDER_STEPS[0]
+        self.assertAlmostEqual(out.avg_price, round(0.45 + LADDER_STEPS[0], 2),
+                               places=2)
+
+    def test_dry_run_can_simulate_no_fill(self):
+        # Patch random.random() to always return 0.999 → above all
+        # ladder fill probs → should fail to fill, exactly as a tough
+        # window in live mode would.
+        from unittest.mock import patch
+        exe = _StubExecutor(post_results=[])
+        exe.dry_run = True
+        with patch("core.execution.random.random", return_value=0.999):
+            out = self._run(exe, price=0.45, size_usd=5.0)
+        self.assertFalse(out.success)
+        self.assertIn("ladder exhausted", out.error)
+        self.assertEqual(exe.placed_count, 1)
+        self.assertEqual(exe.filled_count, 0)
 
     # ── Sizing ──────────────────────────────────────────────
 
