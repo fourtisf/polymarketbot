@@ -30,10 +30,11 @@ HTML_PATH = Path(__file__).parent / "index.html"
 
 
 class DashboardServer:
-    def __init__(self, pnl_tracker, risk_manager, bot_state):
+    def __init__(self, pnl_tracker, risk_manager, bot_state, executor=None):
         self.pnl = pnl_tracker
         self.risk = risk_manager
         self.state = bot_state  # BotState — provides current window snapshot
+        self.executor = executor  # for /api/execution fill-rate metrics
         self._sse_clients: Set[asyncio.Queue] = set()
         self.app = web.Application()
         self._setup_routes()
@@ -46,6 +47,8 @@ class DashboardServer:
         self.app.router.add_get("/api/equity", self.auth(self.handle_equity))
         self.app.router.add_get("/api/config", self.auth(self.handle_config))
         self.app.router.add_get("/api/window", self.auth(self.handle_window))
+        self.app.router.add_get("/api/execution", self.auth(self.handle_execution))
+        self.app.router.add_get("/api/position", self.auth(self.handle_position))
         self.app.router.add_get("/api/live", self.auth(self.handle_sse))
 
     def auth(self, handler):
@@ -110,6 +113,46 @@ class DashboardServer:
 
     async def handle_window(self, request: web.Request) -> web.Response:
         return web.json_response(self.state.snapshot())
+
+    async def handle_execution(self, request: web.Request) -> web.Response:
+        """Live fill-rate metrics from the executor — see if orders are
+        actually getting filled or stuck on the book."""
+        if self.executor is None:
+            return web.json_response({"placed": 0, "filled": 0,
+                                      "fill_rate": 0.0, "avg_attempts": 0.0})
+        return web.json_response(self.executor.execution_snapshot())
+
+    async def handle_position(self, request: web.Request) -> web.Response:
+        """Current active position with entry / max profit / max loss
+        broken out — the dashboard's 'Active Position' card consumes this.
+
+        For binary markets:
+          max_profit = (1 - entry_price) * shares     (the win payout)
+          max_loss   = -entry_price * shares          (lose entire stake)
+        These are the binary-market equivalents of TP and SL.
+        """
+        rec = self.state.entry_record if self.state else None
+        if not rec or not self.state.entered_this_window:
+            return web.json_response({"active": False})
+        entry = float(rec.get("entry_price", 0) or 0)
+        shares = float(rec.get("shares", 0) or 0)
+        cost = float(rec.get("cost", entry * shares) or 0)
+        max_profit = round((1.0 - entry) * shares, 2)
+        max_loss = round(-entry * shares, 2)
+        w = self.state.window
+        return web.json_response({
+            "active": True,
+            "side": rec.get("side"),
+            "entry_price": entry,
+            "shares": shares,
+            "stake": cost,
+            "max_profit": max_profit,
+            "max_loss": max_loss,
+            "confidence": rec.get("confidence"),
+            "window_slug": rec.get("window_slug"),
+            "seconds_remaining": w.seconds_remaining if w else None,
+            "price_to_beat": w.price_to_beat if w else None,
+        })
 
     async def handle_sse(self, request: web.Request) -> web.StreamResponse:
         resp = web.StreamResponse(headers={

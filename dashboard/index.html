@@ -115,6 +115,86 @@ tbody tr.skip{color:var(--dim)}
 
 <main>
 
+  <!-- DRY-RUN simulation banner. Hidden when bot runs live; shown big and
+       loud in dry-run so the operator never confuses simulated PnL with
+       real money. -->
+  <section id="dryRunBanner" style="display:none;margin-bottom:14px;
+       padding:14px 18px;border-radius:14px;
+       background:linear-gradient(135deg,rgba(255,170,40,.15),rgba(255,170,40,.04));
+       border:1px solid rgba(255,170,40,.45);color:#ffaa28;font-weight:600;
+       text-align:center;letter-spacing:.5px">
+    🟡 DRY-RUN MODE — SIMULATED TRADES, NO REAL MONEY AT RISK
+    <div style="font-size:11px;font-weight:400;color:#aa8030;margin-top:4px;
+         letter-spacing:.3px">
+      Fills are probabilistic (calibrated to live behaviour). PnL shown is hypothetical.
+    </div>
+  </section>
+
+  <!-- Active position card — visible only when an entry is open in the
+       current window. Shows binary-market equivalents of stop-loss /
+       take-profit so the operator knows exactly what's at stake. -->
+  <section id="activePosCard" class="card" style="display:none;margin-bottom:14px;
+       border-color:rgba(0,212,170,.3)">
+    <h2>Active position <span id="apSide" class="signal">—</span></h2>
+    <div class="grid c3" style="gap:10px">
+      <div class="kpi">
+        <div class="lbl">Entry price</div>
+        <div class="val mono" id="apEntry">—</div>
+        <div class="muted mono" style="font-size:10px;margin-top:2px">
+          Stake $<span id="apStake">—</span> · <span id="apShares">—</span> sh
+        </div>
+      </div>
+      <div class="kpi" style="border-color:rgba(0,212,170,.4)">
+        <div class="lbl pos">TP — if win</div>
+        <div class="val mono pos" id="apTp">—</div>
+        <div class="muted mono" style="font-size:10px;margin-top:2px">
+          payout = (1 − entry) × shares
+        </div>
+      </div>
+      <div class="kpi" style="border-color:rgba(255,71,87,.4)">
+        <div class="lbl neg">SL — if lose</div>
+        <div class="val mono neg" id="apSl">—</div>
+        <div class="muted mono" style="font-size:10px;margin-top:2px">
+          lose entire stake
+        </div>
+      </div>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <span class="k">Resolves in</span>
+      <span class="v mono" id="apResolve">—</span>
+    </div>
+    <div class="row">
+      <span class="k">Score</span><span class="v mono" id="apScore">—</span>
+    </div>
+    <div class="row">
+      <span class="k">Window</span><span class="v mono dim" id="apSlug">—</span>
+    </div>
+  </section>
+
+  <!-- Execution metrics — diagnostic for whether the cross-spread ladder
+       is actually filling. Critical signal: fill_rate of 0% means the
+       strategy is firing but no trades are happening. -->
+  <section class="card" style="margin-bottom:14px">
+    <h2>Execution health <span id="execMode" class="signal">—</span></h2>
+    <div class="grid c3" style="gap:10px">
+      <div class="kpi">
+        <div class="lbl">Orders placed</div>
+        <div class="val mono" id="execPlaced">0</div>
+      </div>
+      <div class="kpi">
+        <div class="lbl">Orders filled</div>
+        <div class="val mono pos" id="execFilled">0</div>
+      </div>
+      <div class="kpi">
+        <div class="lbl">Fill rate</div>
+        <div class="val mono" id="execRate">—</div>
+        <div class="muted mono" style="font-size:10px;margin-top:2px">
+          avg <span id="execAttempts">—</span> attempts
+        </div>
+      </div>
+    </div>
+  </section>
+
   <section class="card" style="margin-bottom:14px">
     <h2>Equity curve
       <span class="seg" id="eqRange">
@@ -297,6 +377,12 @@ tbody tr.skip{color:var(--dim)}
       const mb = $("modeBadge");
       mb.textContent = s.dry_run ? "DRY-RUN" : "LIVE";
       mb.className = "signal" + (s.dry_run ? " warn" : "");
+      // Show prominent dry-run banner so the operator never confuses
+      // simulated PnL with real trading. Same flag controls execMode badge.
+      $("dryRunBanner").style.display = s.dry_run ? "block" : "none";
+      const em = $("execMode");
+      em.textContent = s.dry_run ? "DRY-RUN" : "LIVE";
+      em.className = "signal" + (s.dry_run ? " warn" : "");
       $("hBal").textContent = "$"+fmt(s.alltime.current_balance,2);
       const td = s.today.pnl||0;
       const he = $("hToday");
@@ -352,6 +438,44 @@ tbody tr.skip{color:var(--dim)}
     try{
       const t = await j("/api/trades?limit=50");
       renderTrades(t);
+    }catch(e){}
+  }
+
+  async function loadExecution(){
+    try{
+      const e = await j("/api/execution");
+      $("execPlaced").textContent = e.placed||0;
+      $("execFilled").textContent = e.filled||0;
+      const rate = (e.fill_rate||0) * 100;
+      const rEl = $("execRate");
+      rEl.textContent = rate.toFixed(1) + "%";
+      // Visual cue: green if healthy, red if 0%
+      rEl.className = "val mono " + (rate >= 30 ? "pos" : (e.placed > 5 ? "neg" : ""));
+      $("execAttempts").textContent = (e.avg_attempts||0).toFixed(2);
+    }catch(e){}
+  }
+
+  async function loadPosition(){
+    try{
+      const p = await j("/api/position");
+      const card = $("activePosCard");
+      if(!p.active){
+        card.style.display = "none";
+        return;
+      }
+      card.style.display = "block";
+      const sb = $("apSide");
+      sb.textContent = p.side || "—";
+      sb.className = "signal" + (p.side === "DOWN" ? " neg" : "");
+      $("apEntry").textContent = "$"+fmt(p.entry_price,3);
+      $("apStake").textContent = fmt(p.stake,2);
+      $("apShares").textContent = fmt(p.shares,0);
+      $("apTp").textContent = "+$"+fmt(p.max_profit,2);
+      $("apSl").textContent = "−$"+fmt(Math.abs(p.max_loss),2);
+      $("apResolve").textContent = p.seconds_remaining!=null
+        ? p.seconds_remaining+"s" : "—";
+      $("apScore").textContent = (p.confidence||0)+"/100";
+      $("apSlug").textContent = p.window_slug || "—";
     }catch(e){}
   }
   function renderTrades(t){
@@ -445,11 +569,13 @@ tbody tr.skip{color:var(--dim)}
       document.body.innerHTML = '<div style="padding:40px;text-align:center;color:#8b8e99">Missing ?token= parameter.</div>';
       return;
     }
-    loadStats(); loadTrades();
+    loadStats(); loadTrades(); loadExecution(); loadPosition();
     connectSSE();
     setInterval(loadStats, 10000);
     setInterval(loadEquity, 30000);
     setInterval(loadTrades, 15000);
+    setInterval(loadExecution, 5000);   // fast — show live fill activity
+    setInterval(loadPosition, 1000);    // every 1s while window is live
   }
   if(document.readyState==="loading") document.addEventListener("DOMContentLoaded",boot);
   else boot();
