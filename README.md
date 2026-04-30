@@ -125,6 +125,10 @@ core/
   risk.py               – sizing + limits + cooldowns
   execution.py          – CLOB limit-order placement
   websockets.py         – resilient async WS base class
+  backtest/
+    replay.py           – pair entry+settled trades, bucket EV/win-rate
+    binance_history.py  – cached 1s/1m kline fetcher
+    simulate.py         – replay strategy.decide() over historical klines
 services/
   binance_feed.py       – Binance BTC trade stream + volume/trend classifier
   polymarket_feed.py    – Polymarket token price feed
@@ -137,9 +141,77 @@ utils/
 dashboard/
   server.py             – aiohttp server + SSE + REST API
   index.html            – single-file dashboard (Chart.js, SSE, dark theme)
+scripts/
+  backtest.py           – CLI: `replay` and `simulate` modes
 data/                   – persisted JSON (trades, equity curve, sessions)
+  cache/binance_klines/ – on-disk kline cache for backtest simulator
 logs/                   – bot.log + PM2 logs
+tests/                  – unittest suite (run: python3 -m unittest discover -s tests)
 ```
+
+## Backtesting
+
+Two modes — both invoked via `scripts/backtest.py`:
+
+### 1. Replay (validates strategy against your live trades)
+
+Pairs every `phase=entry` with its `phase=settled` record in `data/trades.json`,
+buckets by the same dimensions the strategy scores on, and reports the realized
+**win rate vs break-even** per bucket. Bleeding tiers (negative edge) and strong
+tiers (positive edge) are highlighted as tuning suggestions.
+
+```bash
+python3 scripts/backtest.py replay
+# Or analyze a different file:
+python3 scripts/backtest.py replay --trades-file backups/trades-2026-04.json
+```
+
+The break-even win rate for each bucket is the average entry price
+(e.g. an avg entry of $0.55 needs a 55% win rate just to break even).
+The "edge" column is `realized_win_rate − break_even_win_rate` in
+percentage points. Anything < 0pp leaks money in that bucket; tighten or
+exclude it. Anything ≥ +4pp is worth upsizing.
+
+### 2. Simulate (replays strategy over historical Binance klines)
+
+Fetches BTCUSDT 1-second klines for any UTC date range (cached on disk)
+and runs `core.strategy.decide()` over every 5-minute window. This measures
+the **upper bound of the signal edge** — Polymarket order-book history is
+not exposed by the venue, so the simulator uses a synthetic token price
+(default $0.50) to bypass the price gate. Real live performance will
+always be lower than simulated because of slippage and the real price gate.
+
+```bash
+# One day, 1s resolution, default $0.50 token price
+python3 scripts/backtest.py simulate --since 2026-04-29 --until 2026-04-30
+
+# Stress-test what happens if all entries pay $0.55
+python3 scripts/backtest.py simulate --since 2026-04-23 --until 2026-04-30 \
+    --token-price 0.55
+
+# Faster pass with 1m klines (less precise but ~60× fewer rows)
+python3 scripts/backtest.py simulate --since 2026-04-01 --until 2026-04-30 \
+    --interval 1m
+```
+
+Klines are cached at `data/cache/binance_klines/btcusdt_1s_YYYYMMDD.json`.
+Re-running the same date range is free.
+
+The output reports overall win rate, edge, and per-bucket breakdowns by
+confidence and |delta_pct| at entry — use it to validate that the scoring
+tiers in `core/strategy.py:67-144` actually match observed reality before
+you go live with new parameters.
+
+### Workflow for tuning
+
+1. Run `replay` on `data/trades.json` once you have ≥50 settled trades.
+   Identify bleeding buckets.
+2. Run `simulate` over 1–4 weeks of historical data to confirm the
+   bleeding tiers are systemic (not just bad luck on that sample).
+3. Edit `core/strategy.py` (tier cutoffs in `_dynamic_max_price` and
+   `calculate_confidence`) to exclude the bleeding tiers.
+4. Re-run `simulate` to confirm the change improved overall edge.
+5. Deploy and let `replay` validate against another batch of live trades.
 
 ## Red flags — when to stop
 
