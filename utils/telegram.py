@@ -326,9 +326,12 @@ def market_link_html(slug: str, label: str = "Market") -> str:
 
 
 def window_label_from_slug(slug: str) -> str:
-    """Convert a window slug like 'btc-updown-5m-1776258600' to 'HH:MM-HH:MM ET'."""
+    """Convert a window slug like 'btc-updown-5m-1776258600' to 'HH:MM-HH:MM ET'.
+
+    Polymarket's trailing timestamp is the window START.
+    """
     try:
-        end = int(slug.rsplit("-", 1)[-1])
+        start = int(slug.rsplit("-", 1)[-1])
     except Exception:
         return slug
     try:
@@ -336,7 +339,7 @@ def window_label_from_slug(slug: str) -> str:
         tz = ZoneInfo("America/New_York")
     except Exception:
         tz = timezone.utc
-    start = end - 300
+    end = start + 300
     s = datetime.fromtimestamp(start, tz=tz).strftime("%H:%M")
     e = datetime.fromtimestamp(end, tz=tz).strftime("%H:%M")
     return f"{s}-{e} ET"

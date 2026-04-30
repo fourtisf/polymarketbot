@@ -5,10 +5,15 @@ Windows are deterministic (every 5 minutes UTC), but we still have to
 look up the ACTUAL Polymarket market slug + token IDs from the Gamma API,
 because token IDs are unique per-market and can't be derived.
 
+Polymarket's slug convention is `btc-updown-5m-{window_start}` where
+`window_start` is the Unix timestamp at the open of the 5-minute window
+(divisible by 300). Querying with `window_end` returns no market and the
+bot would skip every window.
+
 Window object exposed to the rest of the bot:
   - window_start: int epoch
   - window_end: int epoch
-  - slug: e.g. "btc-updown-5m-1776258600"
+  - slug: e.g. "btc-updown-5m-1776258600" (uses window_start)
   - token_up_id / token_down_id
   - price_to_beat (set later from Chainlink/Binance)
 """
@@ -71,7 +76,7 @@ def current_window_bounds() -> Window:
     return Window(
         window_start=window_start,
         window_end=window_end,
-        slug=f"btc-updown-5m-{window_end}",
+        slug=f"btc-updown-5m-{window_start}",
     )
 
 
