@@ -26,6 +26,15 @@ class TradeContext:
     seconds_remaining: int
     token_up_price: float     # best ask for UP
     token_down_price: float   # best ask for DOWN
+    # Multi-factor extensions. All optional so legacy tests/callers
+    # that don't pass them still work — strategy treats missing values
+    # as neutral (no contribution / no veto).
+    realized_vol_pct: Optional[float] = None      # 60s BTC stddev, %
+    volume_zscore: float = 0.0                    # current vol vs baseline
+    book_imbalance_up: Optional[float] = None     # -1..+1 on UP token
+    book_imbalance_down: Optional[float] = None   # -1..+1 on DOWN token
+    spread_pct_up: Optional[float] = None         # (ask-bid)/mid on UP
+    spread_pct_down: Optional[float] = None       # (ask-bid)/mid on DOWN
 
 
 @dataclass
@@ -43,6 +52,12 @@ ABSOLUTE_MAX_PRICE = 0.62
 MIN_DELTA_HARD = 0.08
 ENTRY_WINDOW_START = 30
 ENTRY_WINDOW_END = 8
+
+# Regime filters — vetoes that fire BEFORE scoring. Independent of confidence.
+# Keep these in code (not config) since they're hard structural gates, not tunables.
+MIN_REALIZED_VOL_PCT = 0.015  # below this BTC is essentially flat → no edge
+MAX_SPREAD_PCT = 0.20         # 20% spread = book too thin for clean fill
+MIN_BOOK_IMBALANCE_FOR_BUMP = 0.20  # imbalance threshold for confirmation bonus
 
 
 def _dynamic_max_price(abs_delta: float, seconds_remaining: int,
@@ -70,6 +85,8 @@ def calculate_confidence(
     delta_trend: str,
     binance_volume: str,
     token_price: float,
+    book_imbalance: Optional[float] = None,
+    volume_zscore: float = 0.0,
 ) -> (int, List[str]):
     score = 0
     reasons: List[str] = []
@@ -141,6 +158,33 @@ def calculate_confidence(
         score -= 30
         reasons.append(f"Price ${token_price:.2f} = NO edge (-30)")
 
+    # ── Book imbalance: confirms the directional flow on the target token.
+    # Aligned imbalance (buyers stronger than sellers on the side we're
+    # buying) is an independent signal vs the Binance lag — they often
+    # disagree, and trades only when they agree have higher expected
+    # win rate than trades on Binance signal alone.
+    if book_imbalance is not None:
+        if book_imbalance >= MIN_BOOK_IMBALANCE_FOR_BUMP:
+            score += 10
+            reasons.append(f"Book imbalance {book_imbalance:+.2f} = aligned (+10)")
+        elif book_imbalance <= -MIN_BOOK_IMBALANCE_FOR_BUMP:
+            score -= 12
+            reasons.append(f"Book imbalance {book_imbalance:+.2f} = OPPOSED (-12)")
+        else:
+            reasons.append(f"Book imbalance {book_imbalance:+.2f} = neutral (+0)")
+
+    # ── Volume z-score: large BTC volume spike near entry is a leading
+    # indicator that momentum is real, not noise.
+    if volume_zscore >= 1.5:
+        score += 8
+        reasons.append(f"Volume z={volume_zscore:+.2f} = high conviction (+8)")
+    elif volume_zscore >= 0.5:
+        score += 3
+        reasons.append(f"Volume z={volume_zscore:+.2f} = elevated (+3)")
+    elif volume_zscore <= -1.0:
+        score -= 5
+        reasons.append(f"Volume z={volume_zscore:+.2f} = unusually quiet (-5)")
+
     return score, reasons
 
 
@@ -188,13 +232,52 @@ def decide(ctx: TradeContext) -> TradeDecision:
             reason_log={"skip_reason": "trend_reversing", **_ctx_dict(ctx)},
         )
 
+    # ── Regime filter: skip dead-vol windows.
+    # When BTC realized vol over the last 60s is below MIN_REALIZED_VOL_PCT,
+    # the Binance→Chainlink latency edge collapses — every "signal" is just
+    # noise. Skipping these windows is the highest-leverage filter we have.
+    if ctx.realized_vol_pct is not None and ctx.realized_vol_pct < MIN_REALIZED_VOL_PCT:
+        return TradeDecision(
+            action="SKIP",
+            reasons=[
+                f"Realized vol {ctx.realized_vol_pct:.4f}% < floor "
+                f"{MIN_REALIZED_VOL_PCT:.3f}% — dead market, no edge"
+            ],
+            reason_log={
+                "skip_reason": "regime_dead_vol",
+                "realized_vol_pct": ctx.realized_vol_pct,
+                **_ctx_dict(ctx),
+            },
+        )
+
     # ── Target selection ──
     if ctx.delta_pct > 0:
         target_side = "UP"
         token_price = ctx.token_up_price
+        target_imbalance = ctx.book_imbalance_up
+        target_spread = ctx.spread_pct_up
     else:
         target_side = "DOWN"
         token_price = ctx.token_down_price
+        target_imbalance = ctx.book_imbalance_down
+        target_spread = ctx.spread_pct_down
+
+    # ── Regime filter: skip when target token book is too thin.
+    # Wide spreads = poor fill quality + likely wide slippage — skip
+    # rather than burn the edge on bad execution.
+    if target_spread is not None and target_spread > MAX_SPREAD_PCT:
+        return TradeDecision(
+            action="SKIP",
+            reasons=[
+                f"{target_side} spread {target_spread*100:.1f}% > "
+                f"{MAX_SPREAD_PCT*100:.1f}% — book too thin"
+            ],
+            reason_log={
+                "skip_reason": "regime_wide_spread",
+                "spread_pct": target_spread,
+                **_ctx_dict(ctx),
+            },
+        )
 
     if token_price <= 0 or token_price >= 0.99:
         return TradeDecision(
@@ -223,6 +306,8 @@ def decide(ctx: TradeContext) -> TradeDecision:
         delta_trend=ctx.delta_trend,
         binance_volume=ctx.binance_volume,
         token_price=token_price,
+        book_imbalance=target_imbalance,
+        volume_zscore=ctx.volume_zscore,
     )
 
     min_conf = config.RUNTIME.min_confidence
@@ -261,4 +346,10 @@ def _ctx_dict(ctx: TradeContext) -> dict:
         "seconds_remaining": ctx.seconds_remaining,
         "token_up_price": ctx.token_up_price,
         "token_down_price": ctx.token_down_price,
+        "realized_vol_pct": ctx.realized_vol_pct,
+        "volume_zscore": ctx.volume_zscore,
+        "book_imbalance_up": ctx.book_imbalance_up,
+        "book_imbalance_down": ctx.book_imbalance_down,
+        "spread_pct_up": ctx.spread_pct_up,
+        "spread_pct_down": ctx.spread_pct_down,
     }

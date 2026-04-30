@@ -70,6 +70,26 @@ class Executor:
     def __init__(self, dry_run: bool = False):
         self.dry_run = dry_run
         self._client = None
+        # Session counters — visible in dashboard / logs to spot
+        # execution-layer regressions. Placed counts every entry attempt
+        # the strategy approves; filled counts the ones that actually
+        # received any shares. fill_rate = filled / placed.
+        self.placed_count: int = 0
+        self.filled_count: int = 0
+        self.cumulative_avg_attempts: float = 0.0  # rolling mean
+
+    def fill_rate(self) -> float:
+        if self.placed_count == 0:
+            return 0.0
+        return self.filled_count / self.placed_count
+
+    def execution_snapshot(self) -> dict:
+        return {
+            "placed": self.placed_count,
+            "filled": self.filled_count,
+            "fill_rate": round(self.fill_rate(), 3),
+            "avg_attempts": round(self.cumulative_avg_attempts, 2),
+        }
 
     def _init_client(self):
         if self._client is not None:
@@ -337,7 +357,9 @@ class Executor:
             "entry: token=%s base_price=%.3f size=$%.2f (%d sh) conf=%d",
             token_id[:10], price, size_usd, shares, confidence,
         )
+        self.placed_count += 1
         if self.dry_run:
+            self.filled_count += 1
             return FillResult(
                 success=True,
                 order_id=f"dry-{int(time.time()*1000)}",
@@ -347,6 +369,7 @@ class Executor:
 
         ladder_start = time.monotonic()
         last_fill: Optional[FillResult] = None
+        attempts_used = 0
 
         for attempt, (bump, timeout) in enumerate(
             zip(LADDER_STEPS, POLL_TIMEOUTS), start=1
@@ -356,6 +379,7 @@ class Executor:
                 log.info("ladder cap hit: $%.3f > $%.3f (skipping attempt %d)",
                          attempt_price, EXECUTION_MAX_PRICE, attempt)
                 break
+            attempts_used = attempt
 
             fill = await self._try_post(token_id, attempt_price, shares)
             last_fill = fill
@@ -370,6 +394,7 @@ class Executor:
                 # Balance/allowance won't resolve via retries; fail fast.
                 return fill
             if fill.success and fill.filled_shares > 0:
+                self._record_fill(attempts_used)
                 return fill
 
             # Order accepted but not yet matched — poll briefly for fills.
@@ -378,11 +403,27 @@ class Executor:
                     fill.order_id, attempt_price, timeout=timeout
                 )
                 if polled.filled_shares > 0:
+                    self._record_fill(attempts_used)
                     return polled
                 await self._cancel(fill.order_id)
 
         last_err = last_fill.error if last_fill and last_fill.error else "no fill"
+        log.warning("ladder exhausted (%d attempts) — fill_rate=%.1f%% (%d/%d)",
+                    attempts_used, self.fill_rate() * 100,
+                    self.filled_count, self.placed_count)
         return FillResult(success=False, error=f"not filled after retries ({last_err})")
+
+    def _record_fill(self, attempts: int) -> None:
+        """Update counters after a successful fill. Tracks rolling avg
+        attempts so we can see if executions are getting harder over time."""
+        self.filled_count += 1
+        prev_n = self.filled_count - 1
+        self.cumulative_avg_attempts = (
+            (self.cumulative_avg_attempts * prev_n + attempts) / self.filled_count
+        )
+        log.info("FILLED: %d/%d (%.1f%% fill rate, avg %.2f attempts)",
+                 self.filled_count, self.placed_count, self.fill_rate() * 100,
+                 self.cumulative_avg_attempts)
 
     @staticmethod
     def _is_balance_error(error: str) -> bool:

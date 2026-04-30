@@ -300,6 +300,14 @@ class TradingBot:
             up_px = self.polymarket.get_best_ask(w.token_up_id) or 0.0
             dn_px = self.polymarket.get_best_ask(w.token_down_id) or 0.0
 
+            # Multi-factor signals (regime filters + book confirmation)
+            realized_vol = self.binance.get_realized_vol_pct(60.0)
+            vol_z = self.binance.get_volume_zscore()
+            imb_up = self.polymarket.get_book_imbalance(w.token_up_id)
+            imb_dn = self.polymarket.get_book_imbalance(w.token_down_id)
+            spread_up = self.polymarket.get_spread_pct(w.token_up_id)
+            spread_dn = self.polymarket.get_spread_pct(w.token_down_id)
+
             ctx = strategy.TradeContext(
                 window_slug=w.slug,
                 price_to_beat=w.price_to_beat,
@@ -310,6 +318,12 @@ class TradingBot:
                 seconds_remaining=w.seconds_remaining,
                 token_up_price=up_px,
                 token_down_price=dn_px,
+                realized_vol_pct=realized_vol,
+                volume_zscore=vol_z,
+                book_imbalance_up=imb_up,
+                book_imbalance_down=imb_dn,
+                spread_pct_up=spread_up,
+                spread_pct_down=spread_dn,
             )
             decision = strategy.decide(ctx)
             self.state.last_decision = {

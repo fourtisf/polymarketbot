@@ -158,6 +158,54 @@ class BinanceFeed(AsyncReconnectingWS):
             return "low"
         return "normal"
 
+    def get_realized_vol_pct(self, lookback_sec: float = 60.0) -> Optional[float]:
+        """Return realized volatility (stddev of returns) over the last
+        `lookback_sec` seconds, as a percent of mid price.
+
+        Used as a regime filter: when realized vol is below ~0.05% per
+        minute the BTC price is essentially flat, the Binance→Chainlink
+        latency edge collapses to zero, and any "signal" from delta is
+        almost certainly noise. Returns None if not enough samples.
+        """
+        if not self.trades_window:
+            return None
+        cutoff = time.time() - lookback_sec
+        prices = [p for ts, p, _ in self.trades_window if ts >= cutoff]
+        if len(prices) < 5:
+            return None
+        # log-return-based stdev. For short windows simple % returns work too,
+        # but log returns avoid asymmetry on directional moves.
+        import math as _m
+        rets = []
+        for a, b in zip(prices[:-1], prices[1:]):
+            if a > 0 and b > 0:
+                rets.append(_m.log(b / a))
+        if len(rets) < 4:
+            return None
+        mean = sum(rets) / len(rets)
+        var = sum((r - mean) ** 2 for r in rets) / (len(rets) - 1)
+        # Scale stddev → annualized-ish: just return raw stdev as % to
+        # keep thresholds intuitive ("0.05% over 1m = dead market").
+        return _m.sqrt(var) * 100.0
+
+    def get_volume_zscore(self) -> float:
+        """Return how many stddevs the current 60s volume is above the
+        rolling baseline. >+1.5 = high-conviction directional flow, useful
+        as an additional confidence bump.
+        """
+        if not self.trades_window or len(self._historical_volumes) < 5:
+            return 0.0
+        cur = sum(q for _, _, q in self.trades_window)
+        hist = list(self._historical_volumes)
+        mean = sum(hist) / len(hist)
+        if mean <= 0:
+            return 0.0
+        var = sum((v - mean) ** 2 for v in hist) / max(len(hist) - 1, 1)
+        sd = var ** 0.5
+        if sd <= 0:
+            return 0.0
+        return (cur - mean) / sd
+
     def classify_trend(self) -> str:
         """'consistent' | 'choppy' | 'reversing' based on last ~60s of deltas."""
         if len(self._recent_deltas) < 6:

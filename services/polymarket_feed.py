@@ -26,13 +26,18 @@ CLOB_BOOK_URL = "https://clob.polymarket.com/book"
 
 
 class TokenBook:
-    __slots__ = ("best_bid", "best_ask", "last_trade", "ts")
+    __slots__ = ("best_bid", "best_ask", "last_trade", "ts",
+                 "bid_levels", "ask_levels")
 
     def __init__(self):
         self.best_bid: Optional[float] = None
         self.best_ask: Optional[float] = None
         self.last_trade: Optional[float] = None
         self.ts: float = 0.0
+        # Top-N levels as (price, size) tuples, sorted best-first.
+        # Captured for book-imbalance computation in the strategy.
+        self.bid_levels: List[tuple] = []
+        self.ask_levels: List[tuple] = []
 
     @property
     def is_stale(self) -> bool:
@@ -92,12 +97,26 @@ class PolymarketFeed(AsyncReconnectingWS):
                 asks = item.get("asks") or []
                 if bids:
                     try:
-                        book.best_bid = max(float(b["price"]) for b in bids)
+                        parsed_bids = [
+                            (float(b["price"]), float(b.get("size", 0)))
+                            for b in bids
+                        ]
+                        # Best bid = highest price (sort descending)
+                        parsed_bids.sort(key=lambda x: -x[0])
+                        book.bid_levels = parsed_bids[:5]
+                        book.best_bid = parsed_bids[0][0]
                     except (KeyError, ValueError, TypeError):
                         pass
                 if asks:
                     try:
-                        book.best_ask = min(float(a["price"]) for a in asks)
+                        parsed_asks = [
+                            (float(a["price"]), float(a.get("size", 0)))
+                            for a in asks
+                        ]
+                        # Best ask = lowest price (sort ascending)
+                        parsed_asks.sort(key=lambda x: x[0])
+                        book.ask_levels = parsed_asks[:5]
+                        book.best_ask = parsed_asks[0][0]
                     except (KeyError, ValueError, TypeError):
                         pass
             elif event in ("last_trade_price", "trade"):
@@ -137,13 +156,21 @@ class PolymarketFeed(AsyncReconnectingWS):
                                 bids = data.get("bids") or []
                                 asks = data.get("asks") or []
                                 if bids:
-                                    book.best_bid = max(
-                                        float(b["price"]) for b in bids
-                                    )
+                                    parsed_bids = [
+                                        (float(b["price"]), float(b.get("size", 0)))
+                                        for b in bids
+                                    ]
+                                    parsed_bids.sort(key=lambda x: -x[0])
+                                    book.bid_levels = parsed_bids[:5]
+                                    book.best_bid = parsed_bids[0][0]
                                 if asks:
-                                    book.best_ask = min(
-                                        float(a["price"]) for a in asks
-                                    )
+                                    parsed_asks = [
+                                        (float(a["price"]), float(a.get("size", 0)))
+                                        for a in asks
+                                    ]
+                                    parsed_asks.sort(key=lambda x: x[0])
+                                    book.ask_levels = parsed_asks[:5]
+                                    book.best_ask = parsed_asks[0][0]
                         except Exception as exc:
                             log.debug("REST book poll %s: %s", token_id[:10], exc)
             except asyncio.CancelledError:
@@ -176,3 +203,33 @@ class PolymarketFeed(AsyncReconnectingWS):
         if not b or b.is_stale:
             return None
         return b.last_trade
+
+    def get_book_imbalance(self, token_id: str, levels: int = 3) -> Optional[float]:
+        """Return (sum_bid_size - sum_ask_size) / total_size at top `levels`.
+
+        Range: -1.0 (only sellers) → +1.0 (only buyers). Positive imbalance
+        on a directional token means buy pressure leads sell pressure —
+        an independent edge source vs the Binance-Chainlink lag signal.
+        Returns None if the book has no depth captured yet.
+        """
+        b = self.tokens.get(token_id)
+        if not b or b.is_stale:
+            return None
+        bid_sz = sum(s for _, s in b.bid_levels[:levels])
+        ask_sz = sum(s for _, s in b.ask_levels[:levels])
+        total = bid_sz + ask_sz
+        if total <= 0:
+            return None
+        return (bid_sz - ask_sz) / total
+
+    def get_spread_pct(self, token_id: str) -> Optional[float]:
+        """Return (ask - bid) / mid as a fraction (e.g. 0.04 = 4 cents on
+        a $0.50 token = 8% spread). Wide spreads = thin book = poor fill
+        quality, useful as a regime filter."""
+        b = self.tokens.get(token_id)
+        if not b or b.is_stale or b.best_bid is None or b.best_ask is None:
+            return None
+        mid = (b.best_bid + b.best_ask) / 2
+        if mid <= 0:
+            return None
+        return (b.best_ask - b.best_bid) / mid
