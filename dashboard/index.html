@@ -3,7 +3,16 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>Polymarket 5m BTC Bot</title>
+<title>AGI Capital · Quant Desk</title>
+<meta name="description" content="AGI Capital — autonomous quant trading on Polymarket BTC 5-minute markets. Live performance dashboard.">
+<meta property="og:title" content="AGI Capital · Live Quant Desk">
+<meta property="og:description" content="Autonomous BTC 5-minute momentum strategy. Live equity curve, trades, and risk telemetry.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://agicapital.io">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="AGI Capital · Live Quant Desk">
+<meta name="twitter:description" content="Autonomous BTC 5-minute momentum strategy. Live equity curve, trades, and risk telemetry.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%2300d4aa'/%3E%3Ctext x='50%25' y='54%25' text-anchor='middle' font-family='system-ui' font-weight='800' font-size='30' fill='%230a0a0f'%3EA%3C/text%3E%3C/svg%3E">
 <link rel="preconnect" href="https://cdn.jsdelivr.net">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js" defer></script>
 <style>
@@ -28,6 +37,11 @@ header{
   padding:10px 14px;display:flex;gap:14px;align-items:center;justify-content:space-between;flex-wrap:wrap;
 }
 .brand{display:flex;gap:10px;align-items:center;font-weight:600;font-size:13px;letter-spacing:.3px}
+.logo-mark{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:6px;
+  background:linear-gradient(135deg,#00d4aa,#00897b);color:#0a0a0f;font-weight:800;font-size:13px;letter-spacing:0;
+  box-shadow:0 0 14px rgba(0,212,170,.35)}
+.brand-name{font-weight:700;letter-spacing:1.2px;font-size:13px}
+.brand-sub{color:var(--muted);font-weight:500;letter-spacing:.5px}
 .dot{width:9px;height:9px;border-radius:50%;background:var(--green);box-shadow:0 0 10px var(--green);animation:pulse 2s infinite}
 .dot.off{background:var(--red);box-shadow:0 0 10px var(--red)}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.45}}
@@ -103,7 +117,9 @@ tbody tr.skip{color:var(--dim)}
 <header>
   <div class="brand">
     <span id="statusDot" class="dot off"></span>
-    <span>POLYMARKET 5M · BTC</span>
+    <span class="logo-mark" aria-hidden="true">A</span>
+    <span class="brand-name">AGI CAPITAL</span>
+    <span class="brand-sub">· Quant Desk</span>
     <span id="modeBadge" class="signal" style="margin-left:4px">—</span>
   </div>
   <div class="hdr-stats">

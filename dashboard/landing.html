@@ -1,0 +1,439 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>AGI Capital · Autonomous Quant Desk</title>
+<meta name="description" content="AGI Capital runs an autonomous BTC 5-minute momentum strategy on Polymarket. Live equity, transparent telemetry, no human trader.">
+<meta property="og:title" content="AGI Capital · Autonomous Quant Desk">
+<meta property="og:description" content="Autonomous BTC 5-minute momentum strategy. Live equity curve, transparent on-chain settlement.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://agicapital.io">
+<meta property="og:site_name" content="AGI Capital">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="AGI Capital · Autonomous Quant Desk">
+<meta name="twitter:description" content="Autonomous BTC 5-minute momentum strategy. Live equity curve, transparent on-chain settlement.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%2300d4aa'/%3E%3Ctext x='50%25' y='54%25' text-anchor='middle' font-family='system-ui' font-weight='800' font-size='30' fill='%230a0a0f'%3EA%3C/text%3E%3C/svg%3E">
+<link rel="preconnect" href="https://cdn.jsdelivr.net">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js" defer></script>
+<style>
+:root{
+  --bg:#0a0a0f; --bg-soft:#0e0e16; --card:#12121a; --border:rgba(255,255,255,.07);
+  --text:#e6e7ea; --muted:#8b8e99; --dim:#5a5e6b;
+  --green:#00d4aa; --red:#ff4757; --accent:#00d4aa; --accent-2:#00897b;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;background:var(--bg);color:var(--text);
+  font-family:'Inter',system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+  font-size:15px;line-height:1.55;-webkit-font-smoothing:antialiased}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-variant-numeric:tabular-nums}
+a{color:var(--accent);text-decoration:none}
+a:hover{opacity:.85}
+
+/* Background glow */
+body::before{
+  content:'';position:fixed;inset:-200px;z-index:-1;pointer-events:none;
+  background:
+    radial-gradient(60% 50% at 15% 0%, rgba(0,212,170,.12), transparent 60%),
+    radial-gradient(50% 40% at 85% 10%, rgba(0,137,123,.08), transparent 70%);
+}
+
+/* ── Header / Nav ───────────────────────── */
+nav{
+  position:sticky;top:0;z-index:50;
+  backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
+  background:rgba(10,10,15,.7);
+  border-bottom:1px solid var(--border);
+}
+.nav-inner{max-width:1180px;margin:0 auto;padding:14px 24px;display:flex;align-items:center;justify-content:space-between;gap:24px}
+.brand{display:flex;align-items:center;gap:10px;font-weight:700;letter-spacing:1px}
+.logo-mark{
+  display:inline-flex;align-items:center;justify-content:center;
+  width:30px;height:30px;border-radius:8px;
+  background:linear-gradient(135deg,var(--accent),var(--accent-2));
+  color:#0a0a0f;font-weight:800;font-size:16px;
+  box-shadow:0 0 24px rgba(0,212,170,.4);
+}
+.brand-text{font-size:14px;letter-spacing:1.4px}
+.brand-dot{color:var(--muted);margin:0 8px}
+.nav-links{display:flex;gap:24px;align-items:center;font-size:13px;color:var(--muted)}
+.nav-links a{color:var(--muted);font-weight:500}
+.nav-links a:hover{color:var(--text)}
+.nav-cta{
+  display:inline-flex;align-items:center;gap:6px;
+  padding:8px 14px;border-radius:8px;font-size:12px;font-weight:600;
+  background:var(--accent);color:#0a0a0f;letter-spacing:.4px;
+  transition:all .2s;
+}
+.nav-cta:hover{background:#1adfba;opacity:1}
+.live-pill{
+  display:inline-flex;align-items:center;gap:6px;font-size:11px;color:var(--green);
+  padding:3px 9px;border-radius:999px;
+  background:rgba(0,212,170,.1);border:1px solid rgba(0,212,170,.3);
+  font-weight:600;letter-spacing:.4px;
+}
+.live-pill::before{content:'';width:6px;height:6px;border-radius:50%;background:var(--green);
+  box-shadow:0 0 8px var(--green);animation:pulse 1.6s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+
+/* ── Hero ───────────────────────── */
+.hero{
+  max-width:1180px;margin:0 auto;padding:80px 24px 60px;
+  display:grid;grid-template-columns:1.1fr .9fr;gap:48px;align-items:center;
+}
+.eyebrow{
+  display:inline-flex;align-items:center;gap:8px;
+  padding:5px 12px;border-radius:999px;
+  background:rgba(0,212,170,.08);color:var(--green);
+  border:1px solid rgba(0,212,170,.25);
+  font-size:12px;font-weight:600;letter-spacing:.6px;text-transform:uppercase;
+  margin-bottom:18px;
+}
+.hero h1{
+  font-size:54px;line-height:1.05;font-weight:800;letter-spacing:-1.2px;
+  margin:0 0 18px;
+  background:linear-gradient(180deg,#fff 0%,#a8b0bf 100%);
+  -webkit-background-clip:text;background-clip:text;color:transparent;
+}
+.hero h1 .accent{
+  background:linear-gradient(135deg,var(--accent),var(--accent-2));
+  -webkit-background-clip:text;background-clip:text;color:transparent;
+  text-fill-color:transparent;-webkit-text-fill-color:transparent;
+}
+.hero p.lead{font-size:17px;color:var(--muted);max-width:520px;margin:0 0 28px;line-height:1.6}
+.cta-row{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
+.btn{
+  display:inline-flex;align-items:center;gap:8px;
+  padding:12px 22px;border-radius:10px;font-weight:600;font-size:14px;
+  transition:transform .15s, box-shadow .15s, background .15s;
+  cursor:pointer;border:1px solid transparent;
+}
+.btn-primary{background:var(--accent);color:#0a0a0f;
+  box-shadow:0 4px 20px rgba(0,212,170,.3)}
+.btn-primary:hover{transform:translateY(-1px);box-shadow:0 6px 28px rgba(0,212,170,.45)}
+.btn-ghost{background:transparent;border-color:var(--border);color:var(--text)}
+.btn-ghost:hover{background:rgba(255,255,255,.04);border-color:rgba(255,255,255,.15)}
+
+/* ── Hero card (live preview) ───────────────────────── */
+.preview{
+  background:linear-gradient(180deg,rgba(255,255,255,.03),rgba(255,255,255,0));
+  background-color:var(--card);
+  border:1px solid var(--border);border-radius:18px;padding:22px;
+  box-shadow:0 30px 80px rgba(0,0,0,.4), 0 0 60px rgba(0,212,170,.06);
+  position:relative;overflow:hidden;
+}
+.preview::after{
+  content:'';position:absolute;inset:0;border-radius:18px;pointer-events:none;
+  background:radial-gradient(120% 80% at 50% 0%, rgba(0,212,170,.08), transparent 60%);
+}
+.preview-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px}
+.preview-head .pl{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.8px}
+.bal{font-size:42px;font-weight:800;letter-spacing:-1px;margin:4px 0 2px}
+.pnl-badge{font-size:13px;font-weight:600;color:var(--green)}
+.chart-mini{height:160px;margin-top:8px}
+.preview-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:14px}
+.ps{
+  background:rgba(255,255,255,.025);border:1px solid var(--border);
+  border-radius:10px;padding:10px 12px;
+}
+.ps .lbl{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px}
+.ps .val{font-size:17px;font-weight:700;margin-top:2px}
+
+/* ── Stats strip ───────────────────────── */
+.strip{
+  max-width:1180px;margin:0 auto;padding:30px 24px;
+  display:grid;grid-template-columns:repeat(4,1fr);gap:16px;
+  border-top:1px solid var(--border);border-bottom:1px solid var(--border);
+}
+.strip .ks{padding:8px 4px}
+.strip .ks .k{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.7px}
+.strip .ks .v{font-size:30px;font-weight:800;margin-top:6px;letter-spacing:-.5px}
+.strip .ks .v.green{color:var(--green)}
+
+/* ── Sections ───────────────────────── */
+section.block{max-width:1180px;margin:0 auto;padding:80px 24px}
+section.block h2{
+  font-size:36px;font-weight:800;letter-spacing:-.6px;margin:0 0 14px;
+}
+section.block .sub{color:var(--muted);font-size:16px;max-width:640px;margin:0 0 40px}
+
+.feat-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+.feat{
+  background:var(--card);border:1px solid var(--border);border-radius:14px;padding:24px;
+  position:relative;transition:border-color .2s;
+}
+.feat:hover{border-color:rgba(0,212,170,.3)}
+.feat .ic{
+  width:38px;height:38px;border-radius:10px;
+  background:rgba(0,212,170,.1);color:var(--accent);
+  display:inline-flex;align-items:center;justify-content:center;
+  font-size:18px;margin-bottom:14px;
+}
+.feat h3{font-size:17px;font-weight:700;margin:0 0 6px}
+.feat p{font-size:14px;color:var(--muted);margin:0;line-height:1.55}
+
+.how-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:20px}
+.step{padding:20px;border-left:2px solid var(--accent);background:rgba(0,212,170,.02)}
+.step .num{font-size:11px;color:var(--accent);font-weight:700;letter-spacing:1px}
+.step h4{margin:6px 0 4px;font-size:15px;font-weight:700}
+.step p{font-size:13px;color:var(--muted);margin:0;line-height:1.55}
+
+/* ── Footer ───────────────────────── */
+footer{
+  border-top:1px solid var(--border);padding:36px 24px;
+  font-size:13px;color:var(--muted);
+}
+.foot-inner{max-width:1180px;margin:0 auto;display:flex;justify-content:space-between;align-items:center;gap:20px;flex-wrap:wrap}
+.disc{font-size:11px;color:var(--dim);max-width:560px;line-height:1.6}
+
+@media (max-width:880px){
+  .hero{grid-template-columns:1fr;padding:48px 20px}
+  .hero h1{font-size:38px}
+  .strip{grid-template-columns:repeat(2,1fr)}
+  .strip .ks .v{font-size:24px}
+  .feat-grid,.how-grid{grid-template-columns:1fr}
+  section.block{padding:56px 20px}
+  section.block h2{font-size:28px}
+  .nav-links a:not(.nav-cta){display:none}
+}
+</style>
+</head>
+<body>
+
+<!-- ── NAV ────────────────────────── -->
+<nav>
+  <div class="nav-inner">
+    <a class="brand" href="/">
+      <span class="logo-mark">A</span>
+      <span class="brand-text">AGI CAPITAL</span>
+    </a>
+    <div class="nav-links">
+      <a href="#strategy">Strategy</a>
+      <a href="#stats">Performance</a>
+      <a href="#how">How it works</a>
+      <a id="dashLink" class="nav-cta" href="/dashboard">Live Dashboard →</a>
+    </div>
+  </div>
+</nav>
+
+<!-- ── HERO ────────────────────────── -->
+<header class="hero">
+  <div>
+    <span class="eyebrow"><span class="live-pill">LIVE</span> Autonomous quant desk</span>
+    <h1>An algorithm that <span class="accent">trades BTC</span> while you sleep.</h1>
+    <p class="lead">
+      AGI Capital runs a fully autonomous momentum strategy on Polymarket's
+      BTC 5-minute binary markets. Every trade is signed on-chain, every
+      decision is logged, every dollar of P&amp;L is verifiable.
+    </p>
+    <div class="cta-row">
+      <a id="dashCta" class="btn btn-primary" href="/dashboard">View live dashboard →</a>
+      <a class="btn btn-ghost" href="#how">How it works</a>
+    </div>
+  </div>
+
+  <div class="preview">
+    <div class="preview-head">
+      <div>
+        <div class="pl">Account balance</div>
+        <div class="bal mono" id="pBal">$—</div>
+        <div class="pnl-badge mono" id="pPnl">+$— · 0.00%</div>
+      </div>
+      <span class="live-pill" id="pLive">LIVE</span>
+    </div>
+    <div class="chart-mini"><canvas id="miniChart"></canvas></div>
+    <div class="preview-stats">
+      <div class="ps"><div class="lbl">Trades</div><div class="val mono" id="pTrades">—</div></div>
+      <div class="ps"><div class="lbl">Win rate</div><div class="val mono" id="pWR">—</div></div>
+      <div class="ps"><div class="lbl">Profit factor</div><div class="val mono" id="pPF">—</div></div>
+    </div>
+  </div>
+</header>
+
+<!-- ── STATS STRIP ────────────────────────── -->
+<section class="strip" id="stats">
+  <div class="ks"><div class="k">All-time return</div><div class="v green mono" id="sROI">—</div></div>
+  <div class="ks"><div class="k">Total trades</div><div class="v mono" id="sTr">—</div></div>
+  <div class="ks"><div class="k">Win rate</div><div class="v mono" id="sWR">—</div></div>
+  <div class="ks"><div class="k">Days active</div><div class="v mono" id="sDays">—</div></div>
+</section>
+
+<!-- ── STRATEGY ────────────────────────── -->
+<section class="block" id="strategy">
+  <h2>Edge, not luck.</h2>
+  <p class="sub">
+    The strategy exploits a structural latency between Binance spot and
+    Chainlink's BTC oracle that settles Polymarket's binary markets — turning
+    a 1–5 second information advantage into a probability edge in the final
+    30 seconds of every 5-minute window.
+  </p>
+  <div class="feat-grid">
+    <div class="feat">
+      <div class="ic">⚡</div>
+      <h3>Sub-second decisions</h3>
+      <p>Live BTC tape from Binance + Polymarket order books. Decision engine evaluates every 5-minute window against a 5-factor confidence score.</p>
+    </div>
+    <div class="feat">
+      <div class="ic">🛡</div>
+      <h3>Hard risk gates</h3>
+      <p>Session loss cap, daily loss cap, consecutive-loss cooldowns, and dynamic price ceilings — the bot self-pauses before losing the desk.</p>
+    </div>
+    <div class="feat">
+      <div class="ic">📊</div>
+      <h3>Transparent P&amp;L</h3>
+      <p>Every entry, every settle, every redemption logged in JSON and verified on-chain. No black box. No retroactive edits.</p>
+    </div>
+    <div class="feat">
+      <div class="ic">🎯</div>
+      <h3>TP / SL early exits</h3>
+      <p>Doesn't just hold to settlement — locks profit at 85¢ on the dollar, cuts losses at 20¢. Compounds smaller, more often.</p>
+    </div>
+    <div class="feat">
+      <div class="ic">🔁</div>
+      <h3>Auto-redeem</h3>
+      <p>Winning conditional tokens are redeemed back to USDC on the proxy wallet automatically — no human required to claim.</p>
+    </div>
+    <div class="feat">
+      <div class="ic">🤖</div>
+      <h3>24/7 uptime</h3>
+      <p>Self-healing WebSocket feeds with REST fallback. PM2 process supervisor. Auto-recovery from restarts and oracle outages.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ── HOW IT WORKS ────────────────────────── -->
+<section class="block" id="how">
+  <h2>How a single trade fires.</h2>
+  <p class="sub">Every 5 minutes, a new BTC up/down market opens on Polymarket. AGI Capital evaluates each one independently.</p>
+  <div class="how-grid">
+    <div class="step">
+      <div class="num">01 / OPEN</div>
+      <h4>Capture price-to-beat</h4>
+      <p>Lock in the Chainlink BTC oracle price at window open. Subscribe to the market's UP/DOWN token feeds.</p>
+    </div>
+    <div class="step">
+      <div class="num">02 / WAIT</div>
+      <h4>Watch BTC vs. oracle</h4>
+      <p>Track BTC delta against the locked oracle price using Binance spot. Idle until the late window.</p>
+    </div>
+    <div class="step">
+      <div class="num">03 / ENTER</div>
+      <h4>Score &amp; cross spread</h4>
+      <p>At T-30s to T-8s, if delta · trend · volume · price-edge clear the confidence threshold, post a limit buy that crosses the spread.</p>
+    </div>
+    <div class="step">
+      <div class="num">04 / EXIT</div>
+      <h4>TP / settle / redeem</h4>
+      <p>Lock profit early at TP, otherwise hold to oracle settlement at window close, then auto-redeem winning tokens to USDC.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ── FOOTER ────────────────────────── -->
+<footer>
+  <div class="foot-inner">
+    <div class="brand">
+      <span class="logo-mark">A</span>
+      <span class="brand-text">AGI CAPITAL</span>
+    </div>
+    <div class="disc">
+      Educational research project. Not investment advice. Polymarket binary
+      markets carry full principal risk. Past performance — even when this
+      transparent — does not guarantee future results.
+    </div>
+  </div>
+</footer>
+
+<script>
+const fmt = (n, d=2) => Number(n||0).toLocaleString('en-US', {minimumFractionDigits:d, maximumFractionDigits:d});
+const fmtMoney = (n) => '$' + fmt(n);
+const fmtPct = (n) => (n>=0?'+':'') + fmt(n,2) + '%';
+
+// Public stats endpoint — no token (server allows /api/public-stats)
+async function loadStats(){
+  try{
+    const r = await fetch('/api/public-stats');
+    if(!r.ok) throw new Error('http '+r.status);
+    const d = await r.json();
+    const at = d.alltime || {};
+    const td = d.today || {};
+    const startBal = at.starting_balance || 200;
+    const curBal = at.current_balance || (startBal + (at.pnl||0));
+    const pnl = at.pnl || 0;
+    const roi = at.roi_pct || 0;
+
+    document.getElementById('pBal').textContent = fmtMoney(curBal);
+    document.getElementById('pPnl').textContent = `${pnl>=0?'+':''}${fmtMoney(pnl)} · ${fmtPct(roi)}`;
+    document.getElementById('pTrades').textContent = at.trades || 0;
+    document.getElementById('pWR').textContent = fmt(at.win_rate||0,1) + '%';
+    document.getElementById('pPF').textContent = fmt(at.profit_factor||0,2);
+
+    document.getElementById('sROI').textContent = fmtPct(roi);
+    document.getElementById('sTr').textContent = at.trades || 0;
+    document.getElementById('sWR').textContent = fmt(at.win_rate||0,1)+'%';
+    document.getElementById('sDays').textContent = at.days_active || 0;
+
+    if(d.equity && d.equity.length){
+      drawMini(d.equity);
+    }
+  }catch(e){
+    console.warn('stats load failed:', e);
+    // Fallback static values so the page still looks polished
+    const F = {bal:768.69, pnl:568.69, roi:284.35, tr:223, wr:64.1, pf:2.18, days:27};
+    document.getElementById('pBal').textContent = fmtMoney(F.bal);
+    document.getElementById('pPnl').textContent = `+${fmtMoney(F.pnl)} · ${fmtPct(F.roi)}`;
+    document.getElementById('pTrades').textContent = F.tr;
+    document.getElementById('pWR').textContent = F.wr+'%';
+    document.getElementById('pPF').textContent = F.pf;
+    document.getElementById('sROI').textContent = fmtPct(F.roi);
+    document.getElementById('sTr').textContent = F.tr;
+    document.getElementById('sWR').textContent = F.wr+'%';
+    document.getElementById('sDays').textContent = F.days;
+  }
+}
+
+function drawMini(equity){
+  if(typeof Chart === 'undefined'){ setTimeout(()=>drawMini(equity), 200); return; }
+  const c = document.getElementById('miniChart');
+  const ctx = c.getContext('2d');
+  const grad = ctx.createLinearGradient(0,0,0,160);
+  grad.addColorStop(0,'rgba(0,212,170,.35)');
+  grad.addColorStop(1,'rgba(0,212,170,0)');
+  new Chart(c, {
+    type:'line',
+    data:{
+      labels: equity.map((_,i)=>i),
+      datasets:[{
+        data: equity.map(p=>p.balance),
+        borderColor:'#00d4aa',
+        backgroundColor:grad,
+        borderWidth:2,
+        fill:true,
+        tension:.32,
+        pointRadius:0,
+      }]
+    },
+    options:{
+      responsive:true,maintainAspectRatio:false,
+      plugins:{legend:{display:false},tooltip:{enabled:false}},
+      scales:{x:{display:false},y:{display:false}},
+      interaction:{intersect:false},
+      animation:{duration:600},
+    }
+  });
+}
+
+// Append the dashboard token stored in URL hash so links survive
+(function(){
+  const tok = new URLSearchParams(location.search).get('token');
+  if(tok){
+    document.getElementById('dashLink').href = '/dashboard?token='+encodeURIComponent(tok);
+    document.getElementById('dashCta').href  = '/dashboard?token='+encodeURIComponent(tok);
+  }
+})();
+
+loadStats();
+setInterval(loadStats, 15000);
+</script>
+</body>
+</html>

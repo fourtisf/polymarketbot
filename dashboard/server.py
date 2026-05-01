@@ -27,6 +27,7 @@ import config
 log = logging.getLogger("dashboard")
 
 HTML_PATH = Path(__file__).parent / "index.html"
+LANDING_PATH = Path(__file__).parent / "landing.html"
 
 
 class DashboardServer:
@@ -40,7 +41,9 @@ class DashboardServer:
         self._runner: web.AppRunner = None
 
     def _setup_routes(self) -> None:
-        self.app.router.add_get("/", self.handle_index)
+        self.app.router.add_get("/", self.handle_landing)
+        self.app.router.add_get("/dashboard", self.handle_index)
+        self.app.router.add_get("/api/public-stats", self.handle_public_stats)
         self.app.router.add_get("/api/stats", self.auth(self.handle_stats))
         self.app.router.add_get("/api/trades", self.auth(self.handle_trades))
         self.app.router.add_get("/api/equity", self.auth(self.handle_equity))
@@ -57,6 +60,15 @@ class DashboardServer:
         return wrapper
 
     # ── Routes ──────────────────────────────────────────
+    async def handle_landing(self, request: web.Request) -> web.Response:
+        """Public marketing page — no token required."""
+        try:
+            html = LANDING_PATH.read_text()
+        except FileNotFoundError:
+            # Fallback to dashboard if landing wasn't deployed
+            return await self.handle_index(request)
+        return web.Response(text=html, content_type="text/html")
+
     async def handle_index(self, request: web.Request) -> web.Response:
         # Dashboard HTML does the token check client-side; the APIs still gate.
         try:
@@ -64,6 +76,42 @@ class DashboardServer:
         except FileNotFoundError:
             return web.Response(text="dashboard/index.html missing", status=500)
         return web.Response(text=html, content_type="text/html")
+
+    async def handle_public_stats(self, request: web.Request) -> web.Response:
+        """
+        Sanitized public stats for the marketing landing page.
+        Exposes only aggregate numbers + equity curve points — never
+        wallet addresses, order IDs, or per-trade details.
+        """
+        alltime = self.pnl.alltime_stats()
+        today = self.pnl.today_stats()
+        equity = self.pnl.equity_curve(limit=200)
+        # Strip anything sensitive — keep only ts + balance
+        equity_clean = [{"ts": p.get("ts"), "balance": p.get("balance")}
+                        for p in equity]
+        return web.json_response({
+            "alltime": {
+                "trades": alltime.get("trades", 0),
+                "wins": alltime.get("wins", 0),
+                "losses": alltime.get("losses", 0),
+                "win_rate": alltime.get("win_rate", 0),
+                "pnl": alltime.get("pnl", 0),
+                "profit_factor": alltime.get("profit_factor", 0),
+                "starting_balance": alltime.get("starting_balance", 0),
+                "current_balance": alltime.get("current_balance", 0),
+                "roi_pct": alltime.get("roi_pct", 0),
+                "days_active": alltime.get("days_active", 0),
+                "max_drawdown": alltime.get("max_drawdown", 0),
+            },
+            "today": {
+                "trades": today.get("trades", 0),
+                "wins": today.get("wins", 0),
+                "losses": today.get("losses", 0),
+                "win_rate": today.get("win_rate", 0),
+                "pnl": today.get("pnl", 0),
+            },
+            "equity": equity_clean,
+        })
 
     async def handle_stats(self, request: web.Request) -> web.Response:
         trades = self.pnl.all_trades()
