@@ -39,29 +39,40 @@ class TradeDecision:
     reason_log: dict = field(default_factory=dict)
 
 
-ABSOLUTE_MAX_PRICE = 0.62
-MIN_DELTA_HARD = 0.08
-ENTRY_WINDOW_START = 30
-ENTRY_WINDOW_END = 8
+def _absolute_max_price() -> float:
+    return float(getattr(config, "ABSOLUTE_MAX_ENTRY_PRICE", 0.62))
+
+
+def _min_delta_hard() -> float:
+    return float(getattr(config, "MIN_DELTA_PCT", 0.08))
+
+
+def _entry_window_start() -> int:
+    return int(getattr(config, "ENTRY_WINDOW_START_SEC", 30))
+
+
+def _entry_window_end() -> int:
+    return int(getattr(config, "ENTRY_WINDOW_END_SEC", 8))
 
 
 def _dynamic_max_price(abs_delta: float, seconds_remaining: int,
                        delta_trend: str) -> float:
+    abs_max = _absolute_max_price()
     if abs_delta >= 0.20 and seconds_remaining <= 15:
-        cap = 0.62
+        cap = abs_max
     elif abs_delta >= 0.15 and seconds_remaining <= 20:
-        cap = 0.60
+        cap = min(0.60, abs_max)
     elif abs_delta >= 0.10:
-        cap = 0.57
+        cap = min(0.57, abs_max)
     elif abs_delta >= 0.08:
-        cap = 0.53
+        cap = min(0.53, abs_max)
     else:
-        cap = 0.50
+        cap = min(0.50, abs_max)
 
     if delta_trend == "choppy":
         cap -= 0.03
 
-    return min(cap, ABSOLUTE_MAX_PRICE)
+    return min(cap, abs_max)
 
 
 def calculate_confidence(
@@ -134,7 +145,7 @@ def calculate_confidence(
     elif token_price <= 0.57:
         score += 3
         reasons.append(f"Price ${token_price:.2f} = fair edge (+3)")
-    elif token_price <= ABSOLUTE_MAX_PRICE:
+    elif token_price <= _absolute_max_price():
         score -= 5
         reasons.append(f"Price ${token_price:.2f} = thin edge (-5)")
     else:
@@ -155,25 +166,28 @@ def _size_multiplier_for_score(score: int) -> float:
 
 
 def decide(ctx: TradeContext) -> TradeDecision:
+    entry_start = _entry_window_start()
+    entry_end = _entry_window_end()
+    min_delta = _min_delta_hard()
     # ── Hard gates ──
-    if ctx.seconds_remaining > ENTRY_WINDOW_START:
+    if ctx.seconds_remaining > entry_start:
         return TradeDecision(
             action="SKIP",
-            reasons=[f"Too early: {ctx.seconds_remaining}s left (window T-{ENTRY_WINDOW_START})"],
+            reasons=[f"Too early: {ctx.seconds_remaining}s left (window T-{entry_start})"],
             reason_log={"skip_reason": "too_early", **_ctx_dict(ctx)},
         )
-    if ctx.seconds_remaining < ENTRY_WINDOW_END:
+    if ctx.seconds_remaining < entry_end:
         return TradeDecision(
             action="SKIP",
-            reasons=[f"Too late: {ctx.seconds_remaining}s left (cutoff T-{ENTRY_WINDOW_END})"],
+            reasons=[f"Too late: {ctx.seconds_remaining}s left (cutoff T-{entry_end})"],
             reason_log={"skip_reason": "too_late", **_ctx_dict(ctx)},
         )
 
     abs_delta = abs(ctx.delta_pct)
-    if abs_delta < MIN_DELTA_HARD:
+    if abs_delta < min_delta:
         return TradeDecision(
             action="SKIP",
-            reasons=[f"Delta {abs_delta:.3f}% below floor {MIN_DELTA_HARD:.3f}%"],
+            reasons=[f"Delta {abs_delta:.3f}% below floor {min_delta:.3f}%"],
             reason_log={"skip_reason": "delta_below_floor", **_ctx_dict(ctx)},
         )
 

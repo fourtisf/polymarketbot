@@ -72,6 +72,8 @@ class BotState:
     last_decision: Optional[dict] = None
     entered_this_window: bool = False
     entry_record: Optional[dict] = None
+    position_closed_early: bool = False  # set True after TP/SL exit
+    last_skip_reason: Optional[str] = None
 
     def snapshot(self) -> Dict[str, Any]:
         w = self.window
@@ -88,7 +90,12 @@ class BotState:
             "token_down_price": self.token_down_price,
             "signal": self.signal,
             "last_decision": self.last_decision,
+            "last_skip_reason": self.last_skip_reason,
             "entered": self.entered_this_window,
+            "position_closed_early": self.position_closed_early,
+            "tp_price": config.TP_PRICE,
+            "sl_price": config.SL_PRICE,
+            "tp_sl_enabled": config.TP_SL_ENABLED,
         }
 
 
@@ -224,6 +231,8 @@ class TradingBot:
                 self.state.window = w
                 self.state.entered_this_window = False
                 self.state.last_decision = None
+                self.state.last_skip_reason = None
+                self.state.position_closed_early = False
                 self.state.signal = "resolving metadata"
                 log.info("═══ new window %s (end in %ds)", w.slug, w.seconds_remaining)
 
@@ -273,6 +282,7 @@ class TradingBot:
 
     async def _monitor_window(self, w: market.Window) -> None:
         """From now until T-5s, look for an entry."""
+        last_logged_skip = ""
         while not self._stopping and w.is_live and w.seconds_remaining > config.ENTRY_WINDOW_END_SEC:
             if w.seconds_remaining > config.ENTRY_WINDOW_START_SEC:
                 self.state.signal = f"waiting (T-{w.seconds_remaining}s)"
@@ -287,18 +297,36 @@ class TradingBot:
             if w.price_to_beat is None:
                 w.price_to_beat = self._capture_price_to_beat(w)
                 if w.price_to_beat is None:
+                    self.state.signal = "no price_to_beat — waiting"
+                    self.state.last_skip_reason = "no_price_to_beat"
                     await asyncio.sleep(1)
                     continue
 
             btc = self.binance.get_price()
             if btc is None:
-                await asyncio.sleep(0.5)
-                continue
+                # In dry-run with synthetic prices enabled, fake a price so
+                # the strategy can still be exercised end-to-end for visibility.
+                if self.dry_run and config.DRY_RUN_SYNTH_PRICES and w.price_to_beat:
+                    btc = w.price_to_beat
+                    log.debug("dry-run synth: btc=%.2f (= price_to_beat)", btc)
+                else:
+                    self.state.signal = "no BTC price — waiting"
+                    self.state.last_skip_reason = "no_btc_price"
+                    await asyncio.sleep(0.5)
+                    continue
             delta = self.binance.get_delta_pct(w.price_to_beat) or 0.0
             trend = self.binance.classify_trend()
             vol = self.binance.classify_volume()
             up_px = self.polymarket.get_best_ask(w.token_up_id) or 0.0
             dn_px = self.polymarket.get_best_ask(w.token_down_id) or 0.0
+
+            # Dry-run synthetic token prices when WS feed is empty so the
+            # operator can still see entries fire in simulation.
+            if self.dry_run and config.DRY_RUN_SYNTH_PRICES:
+                if up_px <= 0:
+                    up_px = 0.50
+                if dn_px <= 0:
+                    dn_px = 0.50
 
             ctx = strategy.TradeContext(
                 window_slug=w.slug,
@@ -318,6 +346,25 @@ class TradingBot:
                 "reasons": decision.reasons[-3:],
             }
             self.state.signal = f"{decision.action} (score {decision.confidence})"
+
+            # Persist SKIP decisions so dry-run sessions are auditable —
+            # only the latest reason per window, dedup'd to avoid log spam.
+            if decision.action == "SKIP":
+                skip_reason = decision.reason_log.get("skip_reason", "skip")
+                self.state.last_skip_reason = skip_reason
+                if skip_reason != last_logged_skip:
+                    last_logged_skip = skip_reason
+                    await self._log_skip(ctx, {
+                        "skip_reason": skip_reason,
+                        "decision": decision.reason_log,
+                        "score": decision.confidence,
+                    })
+                    self.dashboard.broadcast("decision", {
+                        "action": "SKIP",
+                        "reason": skip_reason,
+                        "confidence": decision.confidence,
+                        "reasons": decision.reasons[-3:],
+                    })
 
             if decision.action in ("BUY_UP", "BUY_DOWN"):
                 # Risk gates
@@ -437,17 +484,140 @@ class TradingBot:
         tx_lnk = tx_link_html(fill.tx_hash) if fill.tx_hash else ""
         order_id_str = f"\nOrder: <code>{fill.order_id[:20]}</code>" if fill.order_id else ""
         tx_str = f"\nTX: {tx_lnk}" if tx_lnk else ""
+        # TP/SL line in the entry notification so the operator knows the targets
+        tp_sl_line = ""
+        if config.TP_SL_ENABLED:
+            tp_sl_line = (
+                f"\n🎯 TP: ${config.TP_PRICE:.2f} | "
+                f"🛑 SL: ${config.SL_PRICE:.2f}"
+            )
+
         await self.notifier.send_text(
             f"🟢 <b>ENTRY</b> — {window_label_from_slug(w.slug)}\n"
             f"BUY {record['side']} × {fill.filled_shares:.0f} @ ${fill.avg_price:.3f}\n"
             f"Cost: <b>${record['cost']:.2f}</b> | Score: {decision.confidence}/100\n"
             f"Δ {rl.get('delta_pct', 0):+.3f}% | ⏱ {rl.get('seconds_remaining', '?')}s | "
             f"Trend: {rl.get('delta_trend', '?')}"
+            f"{tp_sl_line}"
             f"{order_id_str}{tx_str}{bal_str}\n"
             f"🔗 {market_lnk}\n"
             f"Session: {sess:+.2f} ({today.get('wins', 0)}W/{today.get('losses', 0)}L)"
         )
         self.dashboard.broadcast("trade", record)
+        self.dashboard.broadcast("decision", {
+            "action": decision.action,
+            "confidence": decision.confidence,
+            "reasons": decision.reasons[-3:],
+            "size_usd": record["cost"],
+            "tp_price": config.TP_PRICE if config.TP_SL_ENABLED else None,
+            "sl_price": config.SL_PRICE if config.TP_SL_ENABLED else None,
+        })
+
+        # Spawn TP/SL early-exit watcher — runs until window close or until
+        # one of the targets fires. Disabled if TP_SL_ENABLED=false.
+        if config.TP_SL_ENABLED:
+            self._tasks.append(asyncio.create_task(
+                self._monitor_position(w, record),
+                name=f"tpsl_{w.slug}",
+            ))
+
+    async def _monitor_position(self, w: market.Window, rec: dict) -> None:
+        """
+        After entry, watch the held token's best_bid each second. If it
+        crosses TP_PRICE → sell to lock profit. If it falls to SL_PRICE
+        → sell to cut loss. Stops automatically at window close (settle
+        will pick up whatever cash remains) or after a successful exit.
+        """
+        token_id = rec.get("token_id", "")
+        side = rec.get("side", "?")
+        entry_px = float(rec.get("entry_price", 0) or 0)
+        shares = float(rec.get("shares", 0) or 0)
+        if not token_id or shares <= 0:
+            return
+
+        tp = float(config.TP_PRICE)
+        sl = float(config.SL_PRICE)
+        log.info("tpsl monitor: %s %.0f sh entry=%.3f TP=%.2f SL=%.2f",
+                 side, shares, entry_px, tp, sl)
+
+        # Hold off until window close − 10s so settle still has time to run.
+        while not self._stopping and not self.state.position_closed_early:
+            if not w.is_live or w.seconds_remaining <= 10:
+                return
+            if not self.state.entered_this_window or self.state.entry_record is None:
+                return  # position was closed elsewhere (e.g. /exit command)
+
+            # Best BID = what someone will pay us right now to take the token.
+            best_bid = self.polymarket.get_best_bid(token_id)
+            # In dry-run with empty feed, simulate a price drift from entry.
+            if best_bid is None:
+                if self.dry_run and config.DRY_RUN_SYNTH_PRICES:
+                    # Drift toward the resolution side using BTC delta as a hint.
+                    delta = self.binance.get_delta_pct(w.price_to_beat) or 0.0
+                    direction = 1.0 if (
+                        (side == "UP" and delta > 0) or
+                        (side == "DOWN" and delta < 0)
+                    ) else -1.0
+                    best_bid = max(0.01, min(0.99,
+                        entry_px + direction * 0.05 * abs(delta) * 10))
+                else:
+                    await asyncio.sleep(1)
+                    continue
+
+            triggered = None
+            if best_bid >= tp:
+                triggered = "TP"
+            elif best_bid <= sl:
+                triggered = "SL"
+
+            if triggered:
+                log.info("tpsl %s HIT: best_bid=%.3f (TP=%.2f SL=%.2f)",
+                         triggered, best_bid, tp, sl)
+                # Place SELL slightly below the bid to cross the spread.
+                sell_px = round(max(0.01, best_bid - 0.01), 2)
+                fill = await self.executor.place_limit_sell(
+                    token_id=token_id, price=sell_px, shares=shares,
+                )
+                if fill.success and fill.filled_shares > 0:
+                    pnl = round((fill.avg_price - entry_px) * fill.filled_shares, 2)
+                    self.state.position_closed_early = True
+                    rec["exit_price"] = fill.avg_price
+                    rec["exit_pnl"] = pnl
+                    rec["exit_reason"] = triggered
+                    rec["exit_order_id"] = fill.order_id
+                    self.trade_log.log_trade({
+                        **rec,
+                        "phase": f"tpsl_{triggered.lower()}",
+                        "outcome": "win" if pnl > 0 else "loss",
+                        "pnl": pnl,
+                    })
+                    self.pnl.record({
+                        **rec,
+                        "outcome": "win" if pnl > 0 else "loss",
+                        "pnl": pnl,
+                        "tpsl_exit": triggered,
+                    })
+                    self.risk.record_trade(pnl)
+
+                    icon = "🎯" if triggered == "TP" else "🛑"
+                    label = "TAKE PROFIT" if triggered == "TP" else "STOP LOSS"
+                    sign = "+" if pnl >= 0 else ""
+                    await self.notifier.send_text(
+                        f"{icon} <b>{label} HIT</b> — {window_label_from_slug(w.slug)}\n"
+                        f"Sold {fill.filled_shares:.0f} {side} "
+                        f"@ ${fill.avg_price:.3f} (entry ${entry_px:.3f})\n"
+                        f"PnL: <b>{sign}${pnl:.2f}</b>"
+                    )
+                    self.dashboard.broadcast("trade", {
+                        **rec,
+                        "phase": f"tpsl_{triggered.lower()}",
+                        "pnl": pnl,
+                    })
+                    return
+                else:
+                    log.warning("tpsl %s sell failed: %s", triggered, fill.error)
+
+            await asyncio.sleep(1)
 
     async def _log_skip(self, ctx: Optional[strategy.TradeContext], reason_log: dict) -> None:
         rec = {
@@ -485,6 +655,16 @@ class TradingBot:
         if not self.state.entered_this_window or self.state.entry_record is None:
             # No trade this window — nothing to settle
             self.state.window = None
+            return
+
+        # If TP/SL already closed the position, settle was already handled
+        # by _monitor_position. Just clear state and exit.
+        if self.state.position_closed_early:
+            log.info("settle: position already closed by TP/SL — skipping")
+            self.state.window = None
+            self.state.entry_record = None
+            self.state.entered_this_window = False
+            self.state.position_closed_early = False
             return
 
         rec = self.state.entry_record

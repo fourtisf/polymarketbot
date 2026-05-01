@@ -86,11 +86,29 @@ COOLDOWN_AFTER_BIG_LOSS_SEC = 900
 
 MIN_CONFIDENCE = _env_int("MIN_CONFIDENCE", 65)
 MIN_DELTA_PCT = _env_float("MIN_DELTA_PCT", 0.08)
+ABSOLUTE_MAX_ENTRY_PRICE = _env_float("ABSOLUTE_MAX_ENTRY_PRICE", 0.62)
 
 ENTRY_WINDOW_START_SEC = _env_int("ENTRY_WINDOW_START", 30)  # T-30s begin
 ENTRY_WINDOW_END_SEC = _env_int("ENTRY_WINDOW_END", 8)       # T-8s last chance
 
 WINDOW_LENGTH_SECONDS = 300
+
+# ─────────────────────────────────────────────────────────────
+# TP / SL — early-exit targets while window is still live
+# Polymarket binary tokens settle to $1 (win) / $0 (loss) at window close.
+# These let us lock profit / cut losses before the window ends.
+#
+# TP_PRICE: sell when token best_bid >= TP_PRICE (lock profit).
+# SL_PRICE: sell when token best_bid <= SL_PRICE (cut loss).
+# Set TP_PRICE >= 1.0 or SL_PRICE <= 0.0 to disable each side.
+# ─────────────────────────────────────────────────────────────
+TP_PRICE = _env_float("TP_PRICE", 0.85)
+SL_PRICE = _env_float("SL_PRICE", 0.20)
+TP_SL_ENABLED = _env("TP_SL_ENABLED", "true").lower() in ("1", "true", "yes", "on")
+
+# Dry-run fallback: when WS feeds aren't producing prices, simulate with
+# synthetic data so the operator can verify the bot's flow end-to-end.
+DRY_RUN_SYNTH_PRICES = _env("DRY_RUN_SYNTH_PRICES", "true").lower() in ("1", "true", "yes", "on")
 
 # ─────────────────────────────────────────────────────────────
 # Data files
@@ -130,6 +148,10 @@ def summary() -> dict:
         "min_confidence": RUNTIME.min_confidence,
         "min_delta_pct": MIN_DELTA_PCT,
         "entry_window": f"T-{ENTRY_WINDOW_START_SEC}s → T-{ENTRY_WINDOW_END_SEC}s",
+        "absolute_max_entry_price": ABSOLUTE_MAX_ENTRY_PRICE,
+        "tp_price": TP_PRICE,
+        "sl_price": SL_PRICE,
+        "tp_sl_enabled": TP_SL_ENABLED,
         "starting_balance": STARTING_BALANCE,
         "dry_run": RUNTIME.dry_run,
         "paused": RUNTIME.paused,

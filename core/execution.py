@@ -350,6 +350,83 @@ class Executor:
 
         return FillResult(success=False, error="not filled after retries")
 
+    async def place_limit_sell(
+        self,
+        token_id: str,
+        price: float,
+        shares: float,
+    ) -> FillResult:
+        """
+        Place a limit SELL for `shares` at `price`. Used by TP/SL early exits.
+        In dry-run mode returns a synthetic fill so the operator can see the
+        full entry → exit lifecycle without touching real money.
+        """
+        shares_int = max(1, int(shares))
+        price = round(min(0.99, max(0.01, price)), 2)
+        log.info(
+            "exit: token=%s price=%.3f sh=%d",
+            token_id[:10], price, shares_int,
+        )
+        if self.dry_run:
+            return FillResult(
+                success=True,
+                order_id=f"dry-sell-{int(time.time()*1000)}",
+                filled_shares=shares_int,
+                avg_price=price,
+            )
+
+        client = self._init_client()
+        if client is None:
+            return FillResult(success=False, error="client unavailable")
+        try:
+            from py_clob_client.clob_types import OrderArgs, OrderType
+        except ImportError:
+            return FillResult(success=False, error="clob types missing")
+
+        def _post():
+            order_args = OrderArgs(
+                price=price,
+                size=shares_int,
+                side="SELL",
+                token_id=token_id,
+            )
+            signed = client.create_order(order_args)
+            return client.post_order(signed, OrderType.GTC)
+
+        try:
+            resp = await asyncio.to_thread(_post)
+        except Exception as exc:
+            log.error("place_limit_sell failed: %s", exc)
+            return FillResult(success=False, error=str(exc))
+
+        if not isinstance(resp, dict):
+            return FillResult(success=False, error=f"unexpected resp: {resp}")
+        if resp.get("errorMsg") or resp.get("error"):
+            err = resp.get("errorMsg") or resp.get("error")
+            return FillResult(success=False, error=str(err))
+        order_id = resp.get("orderID") or resp.get("order_id") or ""
+        status = resp.get("status", "")
+        filled = float(
+            resp.get("filled")
+            or resp.get("takingAmount")
+            or resp.get("size_matched")
+            or 0
+        )
+        tx_hash = self._extract_tx_hash(resp)
+        avg = price
+        if filled > 0 and resp.get("makingAmount"):
+            try:
+                avg = round(float(resp["makingAmount"]) / filled, 4)
+            except (ValueError, ZeroDivisionError):
+                pass
+        return FillResult(
+            success=status in ("matched", "live", "filled"),
+            order_id=order_id,
+            filled_shares=filled,
+            avg_price=avg,
+            tx_hash=tx_hash,
+        )
+
     @staticmethod
     def _is_balance_error(error: str) -> bool:
         """Detect balance/allowance errors that won't resolve with retries."""
