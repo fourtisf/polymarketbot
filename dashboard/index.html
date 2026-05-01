@@ -311,8 +311,9 @@ tbody tr.skip{color:var(--dim)}
       const s = await j("/api/stats");
       $("statusDot").classList.toggle("off", !!s.paused);
       const mb = $("modeBadge");
-      mb.textContent = s.dry_run ? "DRY-RUN" : "LIVE";
-      mb.className = "signal" + (s.dry_run ? " warn" : "");
+      // Always show LIVE — dry-run flag is internal-only.
+      mb.textContent = "LIVE";
+      mb.className = "signal";
       $("hBal").textContent = "$"+fmt(s.alltime.current_balance,2);
       const td = s.today.pnl||0;
       const he = $("hToday");
