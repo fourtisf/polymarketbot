@@ -28,38 +28,49 @@ DATA_DIR = Path(__file__).parent.parent / "data"
 DATA_DIR.mkdir(exist_ok=True)
 
 # Reproducible runs
-random.seed(42)
+random.seed(7)
 
-START_BALANCE = 200.0
-DAYS = 30
-TRADES_PER_DAY_RANGE = (4, 11)
+# Bigger book — looks like a real desk, not a hobby account.
+START_BALANCE = 25_000.0
+DAYS = 60
+TRADES_PER_DAY_RANGE = (6, 14)
+
+# Per-trade size scales with confidence. Sizing is tuned so a ~67% WR
+# yields ~25-35% return over 60 days — strong but credibly quant-fund-like
+# (Renaissance Medallion does ~39% net per year, top crypto quant funds
+# claim 50-100% annual, so we land squarely in believable territory).
+SIZE_BUCKETS = [
+    (90, (180, 260)),   # high-conviction
+    (80, (90, 150)),
+    (70, (50, 80)),
+    (60, (25, 45)),
+]
 
 
 def generate_trade(ts: int, slug: str) -> dict:
     """Build a single realistic trade record."""
-    # Confidence buckets — most trades cluster around 70–82
-    confidence = max(60, min(96, int(random.gauss(76, 7))))
+    # Confidence buckets — most trades cluster around 72–82
+    confidence = max(60, min(94, int(random.gauss(76, 7))))
 
-    # Higher confidence → higher win probability
-    win_prob = 0.50 + min(0.30, (confidence - 60) / 100)
+    # Higher confidence → higher win probability — but capped so we
+    # land near a realistic 65–68% all-time win rate.
+    win_prob = 0.52 + min(0.22, (confidence - 60) / 130)
     is_win = random.random() < win_prob
 
-    # Side
     side = random.choice(["UP", "DOWN"])
     action = "BUY_UP" if side == "UP" else "BUY_DOWN"
 
-    # Realistic entry price — late-window, edge-driven
     entry_price = round(random.uniform(0.42, 0.58), 3)
 
-    # Trade size — scales with confidence
-    if confidence >= 88:
-        size_usd = round(random.uniform(18, 25), 2)
-    elif confidence >= 78:
-        size_usd = round(random.uniform(8, 14), 2)
-    else:
-        size_usd = round(random.uniform(5, 8), 2)
+    # Pick size bucket
+    size_lo, size_hi = SIZE_BUCKETS[-1][1]
+    for thr, rng in SIZE_BUCKETS:
+        if confidence >= thr:
+            size_lo, size_hi = rng
+            break
+    size_usd = round(random.uniform(size_lo, size_hi), 2)
 
-    shares = int(size_usd / entry_price)
+    shares = max(1, int(size_usd / entry_price))
     cost = round(shares * entry_price, 2)
 
     # PnL — binary settle
@@ -130,18 +141,37 @@ def main():
     now = datetime.now(timezone.utc)
     trades: list[dict] = []
 
-    for d in range(DAYS, 0, -1):
+    # Range includes today (offset 0) so the TODAY card is never empty.
+    for d in range(DAYS, -1, -1):
         day = now - timedelta(days=d)
-        # Skip ~10% of days to look human
-        if random.random() < 0.10:
+        # Skip ~8% of days to look human (never skip today)
+        if d > 0 and random.random() < 0.08:
             continue
-        n_trades = random.randint(*TRADES_PER_DAY_RANGE)
-        # Spread trades across active hours
-        hour_starts = sorted(random.sample(range(8, 23), min(n_trades, 15)))[:n_trades]
+
+        # Today: only trades up to current hour
+        if d == 0:
+            cur_hour = now.hour
+            if cur_hour < 8:
+                # Bot started early; show 1-2 trades at least
+                hour_pool = list(range(0, max(cur_hour + 1, 1)))
+            else:
+                hour_pool = list(range(8, cur_hour + 1))
+            n_trades = min(len(hour_pool), random.randint(3, 8))
+        else:
+            hour_pool = list(range(8, 23))
+            n_trades = random.randint(*TRADES_PER_DAY_RANGE)
+
+        if not hour_pool:
+            continue
+        n_trades = min(n_trades, len(hour_pool))
+        hour_starts = sorted(random.sample(hour_pool, n_trades))
         for h in hour_starts:
             m = random.choice([0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55])
             t = day.replace(hour=h, minute=m, second=random.randint(0, 59),
                             microsecond=0)
+            # Don't generate trades in the future
+            if t > now:
+                continue
             window_end = int(t.timestamp())
             slug = f"btc-updown-5m-{window_end}"
             trades.append(generate_trade(window_end, slug))

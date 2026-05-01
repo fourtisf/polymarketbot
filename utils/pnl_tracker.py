@@ -113,13 +113,16 @@ class PnLTracker:
 
     def alltime_stats(self) -> Dict[str, Any]:
         stats = self._stats(self._resolved)
-        stats["starting_balance"] = config.STARTING_BALANCE
-        stats["current_balance"] = round(config.STARTING_BALANCE + stats["pnl"], 2)
-        stats["roi_pct"] = round(stats["pnl"] / config.STARTING_BALANCE * 100, 2) if config.STARTING_BALANCE else 0
+        # Prefer session_log.json's start_balance (set by seeders or by
+        # the bot at first run); fall back to config only if missing.
+        start = self._session_start_balance or config.STARTING_BALANCE
+        stats["starting_balance"] = start
+        stats["current_balance"] = round(start + stats["pnl"], 2)
+        stats["roi_pct"] = round(stats["pnl"] / start * 100, 2) if start else 0
         # Max drawdown
-        peak = config.STARTING_BALANCE
+        peak = start
         max_dd = 0.0
-        running = config.STARTING_BALANCE
+        running = start
         for t in self._resolved:
             running += t.get("pnl", 0)
             if running > peak:
@@ -155,7 +158,7 @@ class PnLTracker:
     def equity_curve(self, limit: int = 500) -> List[Dict[str, Any]]:
         """List of {ts, balance} points for charting."""
         pts = []
-        running = config.STARTING_BALANCE
+        running = self._session_start_balance or config.STARTING_BALANCE
         for t in self._resolved[-limit:]:
             running += t.get("pnl", 0)
             pts.append({"ts": t.get("ts"), "balance": round(running, 2)})
