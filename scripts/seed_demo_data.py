@@ -47,14 +47,30 @@ SIZE_BUCKETS = [
 ]
 
 
-def generate_trade(ts: int, slug: str) -> dict:
-    """Build a single realistic trade record."""
-    # Confidence buckets — most trades cluster around 72–82
+def generate_trade(ts: int, slug: str, day_regime: str = "normal") -> dict:
+    """Build a single realistic trade record.
+
+    day_regime: 'hot' | 'normal' | 'cold' | 'crash' — shifts the
+    win probability so the daily PnL distribution has variance like
+    a real bot (some bad days, occasional drawdown events).
+    """
     confidence = max(60, min(94, int(random.gauss(76, 7))))
 
-    # Higher confidence → higher win probability — but capped so we
-    # land near a realistic 65–68% all-time win rate.
-    win_prob = 0.52 + min(0.22, (confidence - 60) / 130)
+    # Base win probability scales with confidence (52% at 60, ~74% at 94).
+    base_p = 0.52 + min(0.22, (confidence - 60) / 130)
+
+    # Daily regime multiplier — this is what creates losing days.
+    # "hot": +12% (the bot's edge is firing).
+    # "normal": +0%.
+    # "cold": -12% (slippage / mean-reverting tape).
+    # "crash": -25% (rare bad day — major news, oracle drift, etc.).
+    regime_shift = {
+        "hot":    0.12,
+        "normal": 0.00,
+        "cold":   -0.12,
+        "crash":  -0.25,
+    }.get(day_regime, 0.0)
+    win_prob = max(0.18, min(0.92, base_p + regime_shift))
     is_win = random.random() < win_prob
 
     side = random.choice(["UP", "DOWN"])
@@ -62,13 +78,16 @@ def generate_trade(ts: int, slug: str) -> dict:
 
     entry_price = round(random.uniform(0.42, 0.58), 3)
 
-    # Pick size bucket
+    # Pick size bucket — but on crash days the bot has hit the loss-streak
+    # cooldown so trade sizes are halved (defensive behavior).
     size_lo, size_hi = SIZE_BUCKETS[-1][1]
     for thr, rng in SIZE_BUCKETS:
         if confidence >= thr:
             size_lo, size_hi = rng
             break
     size_usd = round(random.uniform(size_lo, size_hi), 2)
+    if day_regime == "crash":
+        size_usd = round(size_usd * 0.5, 2)
 
     shares = max(1, int(size_usd / entry_price))
     cost = round(shares * entry_price, 2)
@@ -141,25 +160,56 @@ def main():
     now = datetime.now(timezone.utc)
     trades: list[dict] = []
 
+    # Pre-roll daily regimes. We want a realistic mix:
+    #   ~50% normal, ~25% hot, ~20% cold, ~5% crash.
+    # And we want crashes to cluster (1-3 consecutive bad days = real drawdown).
+    regimes: list[str] = []
+    i = 0
+    while i <= DAYS:
+        r = random.random()
+        if r < 0.05:
+            # Drawdown cluster: 1-3 consecutive bad days
+            cluster = random.randint(1, 3)
+            for _ in range(cluster):
+                if i > DAYS:
+                    break
+                regimes.append(random.choice(["crash", "cold"]))
+                i += 1
+        elif r < 0.25:
+            regimes.append("cold"); i += 1
+        elif r < 0.50:
+            regimes.append("hot"); i += 1
+        else:
+            regimes.append("normal"); i += 1
+    # regimes[0] = oldest day, regimes[-1] = today
+
     # Range includes today (offset 0) so the TODAY card is never empty.
-    for d in range(DAYS, -1, -1):
+    for idx, d in enumerate(range(DAYS, -1, -1)):
         day = now - timedelta(days=d)
-        # Skip ~8% of days to look human (never skip today)
-        if d > 0 and random.random() < 0.08:
+        regime = regimes[idx] if idx < len(regimes) else "normal"
+
+        # Cold/crash days: bot trades less (cooldowns triggered, fewer signals)
+        if regime == "crash":
+            n_target = random.randint(2, 5)
+        elif regime == "cold":
+            n_target = random.randint(3, 8)
+        elif regime == "hot":
+            n_target = random.randint(8, 14)
+        else:
+            n_target = random.randint(*TRADES_PER_DAY_RANGE)
+
+        # Skip ~6% of normal days entirely (no signals — bot was quiet)
+        if d > 0 and regime in ("normal", "cold") and random.random() < 0.06:
             continue
 
         # Today: only trades up to current hour
         if d == 0:
             cur_hour = now.hour
-            if cur_hour < 8:
-                # Bot started early; show 1-2 trades at least
-                hour_pool = list(range(0, max(cur_hour + 1, 1)))
-            else:
-                hour_pool = list(range(8, cur_hour + 1))
-            n_trades = min(len(hour_pool), random.randint(3, 8))
+            hour_pool = list(range(8, cur_hour + 1)) if cur_hour >= 8 else list(range(0, cur_hour + 1))
+            n_trades = min(len(hour_pool), random.randint(2, max(2, n_target)))
         else:
             hour_pool = list(range(8, 23))
-            n_trades = random.randint(*TRADES_PER_DAY_RANGE)
+            n_trades = n_target
 
         if not hour_pool:
             continue
@@ -169,12 +219,11 @@ def main():
             m = random.choice([0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55])
             t = day.replace(hour=h, minute=m, second=random.randint(0, 59),
                             microsecond=0)
-            # Don't generate trades in the future
             if t > now:
                 continue
             window_end = int(t.timestamp())
             slug = f"btc-updown-5m-{window_end}"
-            trades.append(generate_trade(window_end, slug))
+            trades.append(generate_trade(window_end, slug, day_regime=regime))
 
     # Sort
     trades.sort(key=lambda x: x["ts"])
