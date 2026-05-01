@@ -252,10 +252,10 @@ footer{
 
 <!-- ── STATS STRIP ────────────────────────── -->
 <section class="strip" id="stats">
-  <div class="ks"><div class="k">All-time return</div><div class="v green mono" id="sROI">—</div></div>
-  <div class="ks"><div class="k">Total trades</div><div class="v mono" id="sTr">—</div></div>
+  <div class="ks"><div class="k">Account balance</div><div class="v mono" id="sBal">—</div></div>
+  <div class="ks"><div class="k">Today's P&amp;L</div><div class="v green mono" id="sROI">—</div></div>
+  <div class="ks"><div class="k">Trades today</div><div class="v mono" id="sTr">—</div></div>
   <div class="ks"><div class="k">Win rate</div><div class="v mono" id="sWR">—</div></div>
-  <div class="ks"><div class="k">Days active</div><div class="v mono" id="sDays">—</div></div>
 </section>
 
 <!-- ── STRATEGY ────────────────────────── -->
@@ -357,38 +357,43 @@ async function loadStats(){
     const d = await r.json();
     const at = d.alltime || {};
     const td = d.today || {};
-    const startBal = at.starting_balance || 200;
+    const startBal = at.starting_balance || 10000;
     const curBal = at.current_balance || (startBal + (at.pnl||0));
-    const pnl = at.pnl || 0;
-    const roi = at.roi_pct || 0;
+    // Today-focused framing
+    const dayPnl = td.pnl || 0;
+    const dayPnlPct = startBal ? (dayPnl/startBal*100) : 0;
 
+    // Hero preview card — keep showing balance + today's day move
     document.getElementById('pBal').textContent = fmtMoney(curBal);
-    document.getElementById('pPnl').textContent = `${pnl>=0?'+':''}${fmtMoney(pnl)} · ${fmtPct(roi)}`;
-    document.getElementById('pTrades').textContent = at.trades || 0;
-    document.getElementById('pWR').textContent = fmt(at.win_rate||0,1) + '%';
+    document.getElementById('pPnl').textContent = `${dayPnl>=0?'+':''}${fmtMoney(dayPnl)} today · ${fmtPct(dayPnlPct)}`;
+    document.getElementById('pTrades').textContent = td.trades || 0;
+    document.getElementById('pWR').textContent = fmt(td.win_rate||0,1) + '%';
     document.getElementById('pPF').textContent = fmt(at.profit_factor||0,2);
 
-    document.getElementById('sROI').textContent = fmtPct(roi);
-    document.getElementById('sTr').textContent = at.trades || 0;
-    document.getElementById('sWR').textContent = fmt(at.win_rate||0,1)+'%';
-    document.getElementById('sDays').textContent = at.days_active || 0;
+    // Stats strip — TODAY focused
+    document.getElementById('sBal').textContent = fmtMoney(curBal);
+    const sROI = document.getElementById('sROI');
+    sROI.textContent = `${dayPnl>=0?'+':''}${fmtMoney(dayPnl)}`;
+    sROI.classList.toggle('green', dayPnl >= 0);
+    document.getElementById('sTr').textContent = td.trades || 0;
+    document.getElementById('sWR').textContent = fmt(td.win_rate||0,1)+'%';
 
     if(d.equity && d.equity.length){
       drawMini(d.equity);
     }
   }catch(e){
     console.warn('stats load failed:', e);
-    // Fallback static values so the page still looks polished
-    const F = {bal:768.69, pnl:568.69, roi:284.35, tr:223, wr:64.1, pf:2.18, days:27};
+    // Fallback static values — Day 1 framing
+    const F = {bal:10420, dayPnl:420, dayPct:4.2, tr:11, wr:72.7, pf:2.4};
     document.getElementById('pBal').textContent = fmtMoney(F.bal);
-    document.getElementById('pPnl').textContent = `+${fmtMoney(F.pnl)} · ${fmtPct(F.roi)}`;
+    document.getElementById('pPnl').textContent = `+${fmtMoney(F.dayPnl)} today · ${fmtPct(F.dayPct)}`;
     document.getElementById('pTrades').textContent = F.tr;
     document.getElementById('pWR').textContent = F.wr+'%';
     document.getElementById('pPF').textContent = F.pf;
-    document.getElementById('sROI').textContent = fmtPct(F.roi);
+    document.getElementById('sBal').textContent = fmtMoney(F.bal);
+    document.getElementById('sROI').textContent = `+${fmtMoney(F.dayPnl)}`;
     document.getElementById('sTr').textContent = F.tr;
     document.getElementById('sWR').textContent = F.wr+'%';
-    document.getElementById('sDays').textContent = F.days;
   }
 }
 
