@@ -2,16 +2,17 @@
 Web dashboard server — aiohttp + Server-Sent Events.
 
 Endpoints:
-  GET  /                  → dashboard HTML
-  GET  /api/stats         → today/week/alltime JSON
-  GET  /api/trades        → recent trades
-  GET  /api/equity        → equity curve points
-  GET  /api/live          → SSE stream of live events (window + trades)
-  GET  /api/config        → current runtime config
-  GET  /api/window        → current window snapshot
+  GET  /                  → dashboard HTML (public)
+  GET  /api/stats         → today/week/alltime JSON (public)
+  GET  /api/trades        → recent trades (public)
+  GET  /api/equity        → equity curve points (public)
+  GET  /api/live          → SSE stream of live events (public)
+  GET  /api/window        → current window snapshot (public)
+  GET  /api/config        → current runtime config (admin: ?token=...)
 
-All endpoints require ?token=<DASHBOARD_TOKEN> — without a valid token
-the request is rejected with 401.
+Read-only public endpoints back the public landing/dashboard so prospective
+users can verify performance without an access token. /api/config is gated
+because it exposes the active strategy parameters.
 """
 
 import asyncio
@@ -41,12 +42,13 @@ class DashboardServer:
 
     def _setup_routes(self) -> None:
         self.app.router.add_get("/", self.handle_index)
-        self.app.router.add_get("/api/stats", self.auth(self.handle_stats))
-        self.app.router.add_get("/api/trades", self.auth(self.handle_trades))
-        self.app.router.add_get("/api/equity", self.auth(self.handle_equity))
+        self.app.router.add_get("/dashboard", self.handle_index)
+        self.app.router.add_get("/api/stats", self.handle_stats)
+        self.app.router.add_get("/api/trades", self.handle_trades)
+        self.app.router.add_get("/api/equity", self.handle_equity)
+        self.app.router.add_get("/api/window", self.handle_window)
+        self.app.router.add_get("/api/live", self.handle_sse)
         self.app.router.add_get("/api/config", self.auth(self.handle_config))
-        self.app.router.add_get("/api/window", self.auth(self.handle_window))
-        self.app.router.add_get("/api/live", self.auth(self.handle_sse))
 
     def auth(self, handler):
         async def wrapper(request: web.Request) -> web.Response:
@@ -58,7 +60,6 @@ class DashboardServer:
 
     # ── Routes ──────────────────────────────────────────
     async def handle_index(self, request: web.Request) -> web.Response:
-        # Dashboard HTML does the token check client-side; the APIs still gate.
         try:
             html = HTML_PATH.read_text()
         except FileNotFoundError:
