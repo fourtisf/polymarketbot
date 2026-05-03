@@ -1,8 +1,17 @@
+// Resolve project root once (so the venv path is correct regardless of cwd
+// when pm2 reads the file).
+const path = require("path");
+const ROOT = __dirname;
+
 module.exports = {
   apps: [{
     name: "polymarket-5m-bot",
+    cwd: ROOT,
     script: "bot.py",
-    interpreter: "python3",
+    // Use the project-local virtualenv. PEP 668 (Ubuntu 24.04+) blocks
+    // installing into system Python, so deps live in ./venv. Bootstrap with:
+    //   python3 -m venv venv && ./venv/bin/pip install -r requirements.txt
+    interpreter: path.join(ROOT, "venv", "bin", "python3"),
     watch: false,
     autorestart: true,
     max_restarts: 10,
