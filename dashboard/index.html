@@ -235,9 +235,7 @@ tbody tr.skip{color:var(--dim)}
 
 <script>
 (function(){
-  const qs = new URLSearchParams(location.search);
-  const TOKEN = qs.get("token") || "";
-  const api = (p) => p + (p.includes("?") ? "&" : "?") + "token=" + encodeURIComponent(TOKEN);
+  const api = (p) => p;
   const $ = (id) => document.getElementById(id);
   const fmt = (n,d) => { d = d==null?2:d; return (n==null||isNaN(n)) ? "—" : Number(n).toLocaleString(undefined,{minimumFractionDigits:d,maximumFractionDigits:d}); };
   const sign = (n) => (n>0?"+":"") + fmt(n,2);
@@ -465,10 +463,6 @@ tbody tr.skip{color:var(--dim)}
   });
 
   function boot(){
-    if(!TOKEN){
-      document.body.innerHTML = '<div style="padding:40px;text-align:center;color:#8b8e99">Missing ?token= parameter.</div>';
-      return;
-    }
     loadStats(); loadTrades();
     connectSSE();
     setInterval(loadStats, 10000);
