@@ -10,8 +10,7 @@ Endpoints:
   GET  /api/config        → current runtime config
   GET  /api/window        → current window snapshot
 
-All endpoints require ?token=<DASHBOARD_TOKEN> — without a valid token
-the request is rejected with 401.
+All endpoints are public — no auth.
 """
 
 import asyncio
@@ -40,25 +39,23 @@ class DashboardServer:
         self._runner: web.AppRunner = None
 
     def _setup_routes(self) -> None:
+        # Dashboard is intentionally public — no token gating.
         self.app.router.add_get("/", self.handle_index)
-        self.app.router.add_get("/api/stats", self.auth(self.handle_stats))
-        self.app.router.add_get("/api/trades", self.auth(self.handle_trades))
-        self.app.router.add_get("/api/equity", self.auth(self.handle_equity))
-        self.app.router.add_get("/api/config", self.auth(self.handle_config))
-        self.app.router.add_get("/api/window", self.auth(self.handle_window))
-        self.app.router.add_get("/api/live", self.auth(self.handle_sse))
+        self.app.router.add_get("/api/stats", self.handle_stats)
+        self.app.router.add_get("/api/trades", self.handle_trades)
+        self.app.router.add_get("/api/equity", self.handle_equity)
+        self.app.router.add_get("/api/config", self.handle_config)
+        self.app.router.add_get("/api/window", self.handle_window)
+        self.app.router.add_get("/api/live", self.handle_sse)
+        self.app.on_response_prepare.append(self._cors)
 
-    def auth(self, handler):
-        async def wrapper(request: web.Request) -> web.Response:
-            token = request.query.get("token", "")
-            if token != config.DASHBOARD_TOKEN:
-                return web.json_response({"error": "unauthorized"}, status=401)
-            return await handler(request)
-        return wrapper
+    @staticmethod
+    async def _cors(request: web.Request, response: web.StreamResponse) -> None:
+        # Allow the landing page (and any other origin) to fetch read-only stats.
+        response.headers["Access-Control-Allow-Origin"] = "*"
 
     # ── Routes ──────────────────────────────────────────
     async def handle_index(self, request: web.Request) -> web.Response:
-        # Dashboard HTML does the token check client-side; the APIs still gate.
         try:
             html = HTML_PATH.read_text()
         except FileNotFoundError:

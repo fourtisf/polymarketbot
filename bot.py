@@ -777,10 +777,14 @@ class TradingBot:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--dry-run", action="store_true", help="no real orders")
+    # default=None so we can tell whether the user passed --dry-run or not.
+    # If unset, fall back to the env-driven default (config.DRY_RUN_DEFAULT).
+    parser.add_argument("--dry-run", dest="dry_run", action="store_true", default=None,
+                        help="no real orders (overrides DRY_RUN env)")
     args = parser.parse_args()
 
-    bot = TradingBot(dry_run=args.dry_run)
+    dry_run = args.dry_run if args.dry_run is not None else config.DRY_RUN_DEFAULT
+    bot = TradingBot(dry_run=dry_run)
 
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)

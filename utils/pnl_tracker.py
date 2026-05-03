@@ -153,10 +153,16 @@ class PnLTracker:
         return stats
 
     def equity_curve(self, limit: int = 500) -> List[Dict[str, Any]]:
-        """List of {ts, balance} points for charting."""
+        """List of {ts, balance} points for charting. Always seeds with the
+        starting balance so a single trade still renders as a line, not a
+        lone dot."""
         pts = []
         running = config.STARTING_BALANCE
-        for t in self._resolved[-limit:]:
+        trades = self._resolved[-limit:]
+        if trades:
+            first_ts = trades[0].get("ts", 0) or 0
+            pts.append({"ts": first_ts - 60, "balance": round(running, 2)})
+        for t in trades:
             running += t.get("pnl", 0)
             pts.append({"ts": t.get("ts"), "balance": round(running, 2)})
         return pts

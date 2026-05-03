@@ -36,6 +36,13 @@ def _env_int(key: str, default: int) -> int:
         return default
 
 
+def _env_bool(key: str, default: bool = False) -> bool:
+    v = _env(key, "").lower()
+    if not v:
+        return default
+    return v in ("true", "1", "yes", "on")
+
+
 # ─────────────────────────────────────────────────────────────
 # Polymarket credentials
 # ─────────────────────────────────────────────────────────────
@@ -106,10 +113,15 @@ DAILY_STATS_FILE = DATA_DIR / "daily_stats.json"
 EQUITY_CURVE_FILE = DATA_DIR / "equity_curve.json"
 
 
+# Initial DRY_RUN comes from env so deployments can flip it without
+# changing the pm2 args; CLI --dry-run on bot.py still overrides at start.
+DRY_RUN_DEFAULT = _env_bool("DRY_RUN", False)
+
+
 @dataclass
 class RuntimeFlags:
     """Mutable at runtime — updated by Telegram commands."""
-    dry_run: bool = False
+    dry_run: bool = DRY_RUN_DEFAULT
     paused: bool = False
     base_size_usd: float = BASE_TRADE_SIZE_USD
     max_session_loss: float = MAX_SESSION_LOSS_USD
