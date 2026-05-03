@@ -9,6 +9,7 @@
 <meta property="og:description" content="Autonomous BTC momentum on Polymarket. Public live dashboard. Verifiable on-chain.">
 <link rel="preconnect" href="https://cdn.jsdelivr.net">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.umd.min.js" defer></script>
 <style>
 :root{
   --bg:#07080c; --bg-soft:#0c0e14; --card:#11131c; --card-2:#161927;
@@ -395,11 +396,15 @@ footer p{margin:0}
   <div class="card">
     <h2>
       Equity curve
-      <span class="seg" id="eqRange">
-        <button data-r="1d">1D</button>
-        <button data-r="1w">1W</button>
-        <button data-r="1m" class="on">1M</button>
-        <button data-r="all">ALL</button>
+      <span style="display:inline-flex;gap:10px;align-items:center">
+        <span class="dim" style="font-size:10.5px;font-weight:500;letter-spacing:0;text-transform:none">scroll · pinch · drag to explore</span>
+        <button id="eqReset" class="seg" style="cursor:pointer;padding:5px 10px;font-size:10.5px;color:var(--muted)" title="Reset zoom">↺</button>
+        <span class="seg" id="eqRange">
+          <button data-r="1d">1D</button>
+          <button data-r="1w">1W</button>
+          <button data-r="1m" class="on">1M</button>
+          <button data-r="all">ALL</button>
+        </span>
       </span>
     </h2>
     <div class="chart-wrap"><canvas id="eqChart"></canvas></div>
@@ -680,10 +685,23 @@ footer p{margin:0}
       data:{labels:[],datasets:[{data:[],borderColor:GREEN,backgroundColor:grad,
         borderWidth:2,pointRadius:0,tension:.25,fill:true}]},
       options:{responsive:true,maintainAspectRatio:false,animation:false,
-        plugins:{legend:{display:false},tooltip:{
-          backgroundColor:"#12121a",borderColor:"rgba(255,255,255,.1)",borderWidth:1,
-          callbacks:{ label:(i)=> "Balance $"+fmt(i.parsed.y,2) }
-        }},
+        interaction:{mode:"index",intersect:false},
+        plugins:{
+          legend:{display:false},
+          tooltip:{
+            backgroundColor:"#12121a",borderColor:"rgba(255,255,255,.1)",borderWidth:1,
+            callbacks:{ label:(i)=> "Balance $"+fmt(i.parsed.y,2) }
+          },
+          zoom:{
+            limits:{x:{min:"original",max:"original"}},
+            pan:{enabled:true,mode:"x",threshold:5},
+            zoom:{
+              wheel:{enabled:true,speed:0.1},
+              pinch:{enabled:true},
+              mode:"x"
+            }
+          }
+        },
         scales:{x:{grid:{display:false},ticks:{maxTicksLimit:6}},
                 y:{grid:{color:"rgba(255,255,255,.04)"},ticks:{callback:(v)=>"$"+v}}}
       }
@@ -693,8 +711,18 @@ footer p{margin:0}
       type:"bar",
       data:{labels:[],datasets:[{data:[],backgroundColor:[],borderRadius:4}]},
       options:{responsive:true,maintainAspectRatio:false,animation:false,
-        plugins:{legend:{display:false}},
-        scales:{x:{grid:{display:false}},y:{grid:{color:"rgba(255,255,255,.04)"}}}}
+        plugins:{
+          legend:{display:false},
+          tooltip:{
+            backgroundColor:"#12121a",borderColor:"rgba(255,255,255,.1)",borderWidth:1,
+            callbacks:{label:(i)=>(i.parsed.y>=0?"+$":"-$")+fmt(Math.abs(i.parsed.y),2)}
+          },
+          zoom:{
+            pan:{enabled:true,mode:"x",threshold:5},
+            zoom:{wheel:{enabled:true,speed:0.1},pinch:{enabled:true},mode:"x"}
+          }
+        },
+        scales:{x:{grid:{display:false}},y:{grid:{color:"rgba(255,255,255,.04)"},ticks:{callback:(v)=>(v>=0?"+":"")+"$"+v}}}}
     });
 
     charts.wr = new Chart($("wrChart"),{
@@ -921,11 +949,17 @@ footer p{margin:0}
     };
   }
 
+  const eqResetBtn = document.getElementById("eqReset");
+  if(eqResetBtn){
+    eqResetBtn.onclick = ()=>{ if(charts.eq && charts.eq.resetZoom) charts.eq.resetZoom(); };
+  }
+
   document.querySelectorAll("#eqRange button").forEach(b=>{
     b.onclick = ()=>{
       document.querySelectorAll("#eqRange button").forEach(x=>x.classList.remove("on"));
       b.classList.add("on");
       currentRange = b.dataset.r;
+      if(charts.eq && charts.eq.resetZoom) charts.eq.resetZoom();
       paintEquity();
     };
   });
