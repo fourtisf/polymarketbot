@@ -298,7 +298,6 @@ footer p{margin:0}
     <span class="brand-mark">A</span>
     <span>AGI CAPITAL</span>
     <span id="statusDot" class="dot off" title="bot status"></span>
-    <span id="modeBadge" class="signal" style="margin-left:2px">—</span>
   </div>
   <nav>
     <a href="#performance">Performance</a>
@@ -384,10 +383,10 @@ footer p{margin:0}
   </div>
   <div class="kpi-tile">
     <div class="lbl">
-      <span class="tooltip" data-tip="Win rate over today's trades. Small samples are noisy — see the rolling chart for the realistic edge.">Win Rate (today)</span>
+      <span class="tooltip" data-tip="Total $ wins ÷ total $ losses. >1 means profitable, >2 is a strong edge.">Profit Factor</span>
     </div>
-    <div class="val mono" id="kpiWr">—</div>
-    <div class="sub" id="kpiWrSub">small sample · use rolling</div>
+    <div class="val mono" id="kpiPf">—</div>
+    <div class="sub" id="kpiPfSub">all-time · — trades</div>
   </div>
 </section>
 
@@ -747,9 +746,6 @@ footer p{margin:0}
     try{
       const s = await j("/api/stats");
       $("statusDot").classList.toggle("off", !!s.paused);
-      const mb = $("modeBadge");
-      mb.textContent = s.dry_run ? "DRY-RUN" : "LIVE";
-      mb.className = "signal" + (s.dry_run ? " warn" : "");
 
       const at = s.alltime || {};
       const td = s.today || {};
@@ -777,13 +773,13 @@ footer p{margin:0}
       $("kpiTrades").textContent = (td.trades||0);
       $("kpiTradesSub").textContent = "avg conf "+(td.avg_confidence||0)+" · "+(td.wins||0)+"W / "+(td.losses||0)+"L";
 
-      const kw = $("kpiWr");
-      const wrToday = td.win_rate || 0;
-      kw.textContent = (td.trades||0) ? wrToday+"%" : "—";
-      kw.className = "val mono " + (wrToday >= 55 ? "pos" : wrToday>0?"":"");
-      $("kpiWrSub").textContent = (td.trades||0)<10
-        ? "small sample ("+(td.trades||0)+" trades) · check rolling chart"
-        : (td.trades||0)+" trades today";
+      const kpf = $("kpiPf");
+      const pf = at.profit_factor || 0;
+      kpf.textContent = (at.trades||0) ? Number(pf).toFixed(2) : "—";
+      kpf.className = "val mono " + (pf >= 1.5 ? "pos" : pf>0?"":"");
+      $("kpiPfSub").textContent = (at.trades||0)
+        ? "all-time · "+(at.trades||0)+" trades"
+        : "no trades yet";
 
       fillCard("td", td);
       fillCard("wk", wk);
