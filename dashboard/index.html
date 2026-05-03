@@ -58,13 +58,15 @@ header{
 }
 .brand{display:flex;gap:10px;align-items:center;font-weight:700;font-size:14px;letter-spacing:.4px}
 .brand-mark{
-  width:30px;height:30px;border-radius:8px;
-  background:linear-gradient(135deg,#5dffd1 0%,#00a896 100%);
-  display:flex;align-items:center;justify-content:center;color:#06241d;
-  box-shadow:0 0 18px rgba(0,212,170,.35);
+  width:32px;height:32px;border-radius:50%;
+  background:
+    radial-gradient(circle at 34% 22%, rgba(255,255,255,.55), transparent 55%),
+    linear-gradient(135deg,#7fffd4 0%,#00d4aa 50%,#005f54 100%);
+  display:flex;align-items:center;justify-content:center;color:#04221d;
+  box-shadow:0 0 22px rgba(0,212,170,.4),inset 0 0 0 1px rgba(3,54,46,.4);
   flex-shrink:0;
 }
-.brand-mark svg{width:74%;height:74%;display:block}
+.brand-mark svg{width:78%;height:78%;display:block}
 .dot{width:9px;height:9px;border-radius:50%;background:var(--green);box-shadow:0 0 10px var(--green);animation:pulse 2s infinite}
 .dot.off{background:var(--red);box-shadow:0 0 10px var(--red);animation:none}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.45}}
@@ -302,9 +304,8 @@ footer p{margin:0}
   <div class="brand">
     <span class="brand-mark" aria-label="AGI Capital">
       <svg viewBox="0 0 64 64" fill="none" stroke="currentColor" aria-hidden="true">
-        <path d="M12 53 L32 11 L52 53" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round"/>
-        <path d="M20 39 L44 39" stroke-width="5" stroke-linecap="round"/>
-        <circle cx="32" cy="11" r="3.4" fill="currentColor" stroke="none"/>
+        <path d="M18.5 47 L32 16.5 L45.5 47" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M24 35.5 L40 35.5" stroke-width="5.5" stroke-linecap="round"/>
       </svg>
     </span>
     <span>AGI CAPITAL</span>
