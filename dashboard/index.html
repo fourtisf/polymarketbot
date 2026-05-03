@@ -3,10 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>AGI Capital · Autonomous Quant Desk</title>
-<meta name="description" content="A fully autonomous BTC momentum strategy on Polymarket's 5-minute binary markets. Every trade signed on-chain, every dollar of P&L verifiable.">
+<title>AGI Capital · Autonomous Quant Desk · Paper Trading</title>
+<meta name="description" content="An autonomous BTC momentum strategy on Polymarket's 5-minute binary markets. Currently in paper-trading validation phase. Live deployment funded by the $AGI token launch.">
 <meta property="og:title" content="AGI Capital · Autonomous Quant Desk">
-<meta property="og:description" content="Autonomous BTC momentum on Polymarket. Public live dashboard. Verifiable on-chain.">
+<meta property="og:description" content="Autonomous BTC momentum on Polymarket. Paper-trading validation phase. Public dashboard, no signup.">
 <link rel="preconnect" href="https://cdn.jsdelivr.net">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js" defer></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.umd.min.js" defer></script>
@@ -291,7 +291,7 @@ footer p{margin:0}
 <body>
 
 <div class="ribbon">
-  <b>$AGI token launch is coming.</b> Earn allocation by tracking the live desk · <a href="#token">claim spot →</a>
+  <b>Strategy validation phase</b> · $10K paper-trading on live market data · live deployment funded by <a href="#token">$AGI token launch →</a>
 </div>
 
 <header>
@@ -299,6 +299,7 @@ footer p{margin:0}
     <span class="brand-mark">A</span>
     <span>AGI CAPITAL</span>
     <span id="statusDot" class="dot off" title="bot status"></span>
+    <span id="modeBadge" class="signal warn" style="margin-left:2px;font-size:10px">PAPER</span>
   </div>
   <nav>
     <a href="#performance">Performance</a>
@@ -312,12 +313,13 @@ footer p{margin:0}
 <!-- ─── HERO ─────────────────────────────────────── -->
 <section class="hero">
   <div>
-    <div class="eyebrow">Autonomous · On-chain · 24/7</div>
+    <div class="eyebrow">Paper trading · Strategy validation · Pre-launch</div>
     <h1>An algo that <span class="accent">trades while you sleep.</span></h1>
     <p class="lede">
-      AGI Capital runs a fully autonomous momentum strategy on Polymarket's BTC 5-minute binary markets.
-      Every trade is signed on-chain, every decision is logged, every dollar of P&amp;L is verifiable
-      by anyone — no token required.
+      AGI Capital is validating a fully autonomous momentum strategy on Polymarket's BTC 5-minute
+      binary markets. The bot runs against real-time market data with <b>$10K simulated capital</b> —
+      same logic, same risk limits, no real funds at risk yet. Live deployment begins after the
+      $AGI token launch funds the trading treasury.
     </p>
     <div class="hero-actions">
       <a href="#live" class="cta">View live dashboard →</a>
@@ -326,23 +328,23 @@ footer p{margin:0}
     <div class="trust-row">
       <span class="ti">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 13l4 4L19 7" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        Public dashboard, no signup
+        Paper trading · 100% transparent
       </span>
       <span class="ti">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 2l3.5 7 7.5 1-5.5 5.5L19 23l-7-4-7 4 1.5-7.5L1 10l7.5-1L12 2z" stroke-linejoin="round"/></svg>
-        Settlements verifiable on-chain
+        Live deployment post-launch
       </span>
       <span class="ti">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2" stroke-linecap="round"/></svg>
-        Hard risk limits enforced
+        Hard risk limits enforced in code
       </span>
     </div>
   </div>
 
   <div class="hero-card">
     <h3>
-      <span>Live equity · last 30d</span>
-      <span class="live-badge"><span class="dot" style="width:6px;height:6px"></span>LIVE</span>
+      <span>Simulated equity · last 30d</span>
+      <span class="live-badge" style="background:rgba(255,170,40,.14);color:var(--amber);border-color:rgba(255,170,40,.35)"><span class="dot" style="width:6px;height:6px;background:var(--amber);box-shadow:0 0 8px var(--amber)"></span>PAPER</span>
     </h3>
     <div class="hero-chart"><canvas id="heroEqChart"></canvas></div>
     <div class="hero-stats">
@@ -449,11 +451,16 @@ footer p{margin:0}
 <!-- ─── Honesty block ───────────────────────────── -->
 <section class="block tight">
   <div class="disclaimer">
-    <b>How to read this:</b> Polymarket 5-min binaries are noisy. Short windows are easily skewed by
-    a few lucky entries. The signal worth trusting is the <b>cumulative equity curve</b>, the
-    <b>Sharpe ratio</b>, the <b>profit factor</b>, and the <b>max drawdown</b> across many trades.
-    Past performance does not guarantee future results — strategies degrade, edges disappear.
-    Trade responsibly.
+    <b>Important — this is paper trading.</b> AGI Capital is currently in simulation mode.
+    The bot runs the same strategy logic that will execute live, but trades are paper fills against
+    real-time market data — <b>no real funds are placed on Polymarket yet</b>. We're publishing this
+    pre-launch so the strategy edge can be audited before the $AGI token-launch treasury funds
+    live deployment.<br><br>
+    Polymarket 5-min binaries are noisy — short windows are easily skewed by a few lucky entries.
+    The signals worth trusting across many trades are the <b>cumulative equity curve</b>, the
+    <b>Sharpe ratio</b>, the <b>profit factor</b>, and the <b>max drawdown</b>. Simulated past
+    performance does not guarantee future live results — slippage, partial fills, and gas failures
+    will compress returns once real capital is deployed. Trade responsibly.
   </div>
 </section>
 
@@ -563,14 +570,15 @@ footer p{margin:0}
   <div class="eyebrow">Transparency</div>
   <h2 class="h-section">Verifiable, not vibes.</h2>
   <p class="h-sub">
-    Most trading dashboards show curated screenshots. AGI Capital exposes the raw bot state — including
-    skipped windows, losing streaks, and active risk limits.
+    Most pre-launch projects show curated mockups. AGI Capital exposes the raw bot state — paper
+    fills, skipped windows, losing streaks, and active risk limits — so the strategy edge can be
+    audited <i>before</i> a single dollar of treasury capital is deployed.
   </p>
   <div class="trust-grid">
     <div class="trust-item">
-      <span class="badge">On-chain</span>
-      <h3>Every fill is a Polygon transaction</h3>
-      <p>Polymarket settles binary markets through CLOB orders signed by the bot's wallet. You can audit fills, sizes, and outcomes against the public chain.</p>
+      <span class="badge">Paper now · live post-launch</span>
+      <h3>Honest about today's mode</h3>
+      <p>The bot is currently paper-trading with $10K simulated capital against real Polymarket prices and Chainlink price feeds. Once $AGI token launches, the treasury funds the same strategy live — every fill becomes a Polygon transaction, signed by a public wallet, viewable on Polygonscan.</p>
     </div>
     <div class="trust-item">
       <span class="badge">Open data</span>
@@ -580,12 +588,12 @@ footer p{margin:0}
     <div class="trust-item">
       <span class="badge">Risk-bounded</span>
       <h3>Hard limits before sizing</h3>
-      <p>Max session loss, daily loss cap, max consecutive losses, and post-loss cooldowns are enforced <i>before</i> any order — not after the bleed.</p>
+      <p>Max session loss, daily loss cap, max consecutive losses, and post-loss cooldowns are enforced <i>before</i> any order — paper or live. Same code path.</p>
     </div>
     <div class="trust-item">
       <span class="badge">Skip-first</span>
       <h3>Skipping is the default</h3>
-      <p>The strategy refuses thousands of windows for every one it enters. A high win rate on few trades comes from being picky — not from cherry-picking after the fact.</p>
+      <p>The strategy refuses thousands of windows for every one it enters. Selectivity is what makes the edge — not luck on cherry-picked trades.</p>
     </div>
     <div class="trust-item">
       <span class="badge">Live state</span>
@@ -599,8 +607,8 @@ footer p{margin:0}
     </div>
     <div class="trust-item">
       <span class="badge">No promises</span>
-      <h3>Strategies degrade. We say so.</h3>
-      <p>Markets adapt. The edge you see today may shrink. That's why drawdown and Sharpe are headline metrics — not selectively-window'd win rates.</p>
+      <h3>Simulated ≠ guaranteed live.</h3>
+      <p>Paper-trading numbers don't include slippage, partial fills, or gas failures. Once live, returns will compress. Markets adapt; edges shrink. That's why the launch unlocks treasury capital gradually — see token section.</p>
     </div>
   </div>
 </section>
@@ -609,10 +617,12 @@ footer p{margin:0}
 <section class="block" id="token">
   <div class="token-cta">
     <div class="eyebrow">Coming soon</div>
-    <h2>$AGI · the autonomous-desk token.</h2>
+    <h2>$AGI · funds the live trading desk.</h2>
     <p>
-      Holders share fee flow from the desk and gate access to upcoming strategies (ETH 5m, perps funding,
-      sports-book arb). Whitelist closes when the cap fills — performance allocators get priority.
+      The strategy is validated. The token launch unlocks the treasury that deploys it live.
+      40% of $AGI supply funds real-money execution on Polymarket; holders share fee flow from
+      the live desk and get priority on upcoming strategies (ETH 5m, perps funding, sports-book arb).
+      Whitelist closes when the cap fills.
     </p>
     <div class="actions">
       <a class="cta" href="https://t.me/agicapital_bot" target="_blank" rel="noopener">Claim whitelist spot →</a>
@@ -621,9 +631,15 @@ footer p{margin:0}
     <div class="token-stats">
       <div class="ts"><div class="lbl">Supply</div><div class="val mono">100,000,000</div></div>
       <div class="ts"><div class="lbl">Public sale</div><div class="val mono">15%</div></div>
-      <div class="ts"><div class="lbl">Treasury → desk</div><div class="val mono">40%</div></div>
+      <div class="ts"><div class="lbl">Treasury → live desk</div><div class="val mono">40%</div></div>
       <div class="ts"><div class="lbl">Team (vested 24m)</div><div class="val mono">15%</div></div>
     </div>
+    <p style="margin-top:22px;font-size:11.5px;color:var(--dim);max-width:640px;line-height:1.5">
+      Disclaimer: $AGI is a utility token. Performance shown above is paper-trading simulation and
+      does not represent live trading results. Live deployment, returns, and fee flow depend on
+      strategy performance under real-market conditions post-launch. Crypto involves substantial
+      risk of loss. Not financial advice. Not available in restricted jurisdictions.
+    </p>
   </div>
 </section>
 
@@ -770,6 +786,12 @@ footer p{margin:0}
     try{
       const s = await j("/api/stats");
       $("statusDot").classList.toggle("off", !!s.paused);
+      const mb = $("modeBadge");
+      if(mb){
+        mb.textContent = s.dry_run ? "PAPER" : "LIVE";
+        mb.className = "signal" + (s.dry_run ? " warn" : "");
+        mb.style.fontSize = "10px";
+      }
 
       const at = s.alltime || {};
       const td = s.today || {};
