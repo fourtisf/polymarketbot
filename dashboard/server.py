@@ -47,6 +47,12 @@ class DashboardServer:
         self.app.router.add_get("/api/config", self.handle_config)
         self.app.router.add_get("/api/window", self.handle_window)
         self.app.router.add_get("/api/live", self.handle_sse)
+        self.app.on_response_prepare.append(self._cors)
+
+    @staticmethod
+    async def _cors(request: web.Request, response: web.StreamResponse) -> None:
+        # Allow the landing page (and any other origin) to fetch read-only stats.
+        response.headers["Access-Control-Allow-Origin"] = "*"
 
     # ── Routes ──────────────────────────────────────────
     async def handle_index(self, request: web.Request) -> web.Response:
