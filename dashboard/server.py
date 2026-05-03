@@ -43,6 +43,8 @@ class DashboardServer:
     def _setup_routes(self) -> None:
         self.app.router.add_get("/", self.handle_index)
         self.app.router.add_get("/dashboard", self.handle_index)
+        self.app.router.add_get("/logo.svg", self.handle_logo)
+        self.app.router.add_get("/favicon.ico", self.handle_logo)
         self.app.router.add_get("/api/stats", self.handle_stats)
         self.app.router.add_get("/api/trades", self.handle_trades)
         self.app.router.add_get("/api/equity", self.handle_equity)
@@ -65,6 +67,16 @@ class DashboardServer:
         except FileNotFoundError:
             return web.Response(text="dashboard/index.html missing", status=500)
         return web.Response(text=html, content_type="text/html")
+
+    async def handle_logo(self, request: web.Request) -> web.Response:
+        path = Path(__file__).parent / "logo.svg"
+        if not path.exists():
+            return web.Response(status=404)
+        return web.Response(
+            body=path.read_bytes(),
+            content_type="image/svg+xml",
+            headers={"Cache-Control": "public, max-age=86400"},
+        )
 
     async def handle_stats(self, request: web.Request) -> web.Response:
         trades = self.pnl.all_trades()

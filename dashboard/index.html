@@ -8,6 +8,8 @@
 <meta property="og:title" content="AGI Capital · Autonomous Quant Desk">
 <meta property="og:description" content="Autonomous BTC momentum on Polymarket. Paper-trading validation phase. Public dashboard, no signup.">
 <link rel="preconnect" href="https://cdn.jsdelivr.net">
+<link rel="icon" type="image/svg+xml" href="/logo.svg">
+<link rel="apple-touch-icon" href="/logo.svg">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js" defer></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.umd.min.js" defer></script>
 <style>
@@ -56,11 +58,13 @@ header{
 }
 .brand{display:flex;gap:10px;align-items:center;font-weight:700;font-size:14px;letter-spacing:.4px}
 .brand-mark{
-  width:26px;height:26px;border-radius:7px;
-  background:linear-gradient(135deg,#00d4aa 0%,#00a896 100%);
+  width:30px;height:30px;border-radius:8px;
+  background:linear-gradient(135deg,#5dffd1 0%,#00a896 100%);
   display:flex;align-items:center;justify-content:center;color:#06241d;
-  font-weight:800;font-size:13px;box-shadow:0 0 18px rgba(0,212,170,.35);
+  box-shadow:0 0 18px rgba(0,212,170,.35);
+  flex-shrink:0;
 }
+.brand-mark svg{width:74%;height:74%;display:block}
 .dot{width:9px;height:9px;border-radius:50%;background:var(--green);box-shadow:0 0 10px var(--green);animation:pulse 2s infinite}
 .dot.off{background:var(--red);box-shadow:0 0 10px var(--red);animation:none}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.45}}
@@ -296,7 +300,13 @@ footer p{margin:0}
 
 <header>
   <div class="brand">
-    <span class="brand-mark">A</span>
+    <span class="brand-mark" aria-label="AGI Capital">
+      <svg viewBox="0 0 64 64" fill="none" stroke="currentColor" aria-hidden="true">
+        <path d="M12 53 L32 11 L52 53" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M20 39 L44 39" stroke-width="5" stroke-linecap="round"/>
+        <circle cx="32" cy="11" r="3.4" fill="currentColor" stroke="none"/>
+      </svg>
+    </span>
     <span>AGI CAPITAL</span>
     <span id="statusDot" class="dot off" title="bot status"></span>
     <span id="modeBadge" class="signal warn" style="margin-left:2px;font-size:10px">PAPER</span>
