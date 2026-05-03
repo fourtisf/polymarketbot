@@ -1,0 +1,530 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Agicapital — Logo</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#0a0a0f;
+  --card:#12121a;
+  --card-2:#16161f;
+  --border:rgba(255,255,255,.06);
+  --border-strong:rgba(255,255,255,.12);
+  --text:#e6e7ea;
+  --muted:#8b8e99;
+  --dim:#5a5e6b;
+  --green:#00d4aa;
+  --green-soft:rgba(0,212,170,.14);
+  --glow:0 0 60px rgba(0,212,170,.10);
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;background:var(--bg);color:var(--text);
+  font-family:"Space Grotesk",system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+  font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased}
+.mono{font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace}
+
+/* ambient gradient backdrop */
+body::before{
+  content:"";position:fixed;inset:0;pointer-events:none;z-index:0;
+  background:
+    radial-gradient(800px 400px at 15% -10%, rgba(0,212,170,.10), transparent 60%),
+    radial-gradient(700px 500px at 100% 110%, rgba(0,212,170,.05), transparent 60%);
+}
+
+header{
+  position:sticky;top:0;z-index:50;
+  backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+  background:rgba(10,10,15,.7);border-bottom:1px solid var(--border);
+  padding:14px 22px;display:flex;gap:14px;align-items:center;justify-content:space-between;
+}
+.crumb{font-size:11px;color:var(--muted);letter-spacing:.6px;text-transform:uppercase}
+.crumb b{color:var(--text);font-weight:600}
+.tag-pill{font-size:10px;padding:3px 9px;border-radius:999px;
+  background:var(--green-soft);color:var(--green);border:1px solid rgba(0,212,170,.3);letter-spacing:.5px}
+
+main{position:relative;z-index:1;max-width:1180px;margin:0 auto;padding:36px 22px 96px}
+
+/* Hero */
+.hero{
+  background:linear-gradient(180deg,rgba(255,255,255,.02),rgba(255,255,255,0));
+  background-color:var(--card);
+  border:1px solid var(--border);
+  border-radius:20px;padding:64px 28px;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  box-shadow:var(--glow);position:relative;overflow:hidden;
+}
+.hero::after{
+  content:"";position:absolute;inset:0;pointer-events:none;
+  background:radial-gradient(600px 240px at 50% 100%, rgba(0,212,170,.08), transparent 70%);
+}
+.hero .lockup{position:relative;z-index:1}
+.hero .tagline{
+  margin-top:22px;font-size:12px;color:var(--muted);letter-spacing:2.4px;text-transform:uppercase;
+  position:relative;z-index:1
+}
+
+/* Section headings */
+.section-head{
+  display:flex;align-items:center;justify-content:space-between;
+  margin:48px 4px 14px
+}
+.section-head h2{
+  margin:0;font-size:11px;font-weight:600;color:var(--muted);
+  text-transform:uppercase;letter-spacing:1.4px
+}
+.section-head .meta{font-size:11px;color:var(--dim);letter-spacing:.4px}
+
+/* Grid */
+.grid{display:grid;gap:14px}
+.grid.c2{grid-template-columns:1fr 1fr}
+.grid.c3{grid-template-columns:repeat(3,1fr)}
+.grid.c4{grid-template-columns:repeat(4,1fr)}
+@media (max-width:860px){
+  .grid.c2,.grid.c3,.grid.c4{grid-template-columns:1fr 1fr}
+  .hero{padding:44px 20px}
+}
+@media (max-width:560px){
+  .grid.c2,.grid.c3,.grid.c4{grid-template-columns:1fr}
+}
+
+/* Cards */
+.card{
+  background:var(--card);
+  border:1px solid var(--border);border-radius:14px;
+  padding:18px;display:flex;flex-direction:column;gap:14px;min-height:180px;
+}
+.card.light{background:#f4f5f7;border-color:#e3e5ea}
+.card.invert{background:#fff;border-color:#e3e5ea}
+.card.gradient{
+  background:
+    radial-gradient(600px 200px at 0% 0%, rgba(0,212,170,.18), transparent 60%),
+    linear-gradient(140deg, #0e1a18, #0a0a0f);
+}
+.card .stage{
+  flex:1;display:flex;align-items:center;justify-content:center;
+  min-height:120px;padding:10px
+}
+.card .label{
+  display:flex;justify-content:space-between;align-items:center;
+  font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1.2px
+}
+.card .label .swatch-name{color:var(--dim)}
+.card.light .label, .card.invert .label{color:#5a5e6b}
+.card.light .label .swatch-name, .card.invert .label .swatch-name{color:#8b8e99}
+
+/* Color tokens */
+.swatches{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-top:14px}
+@media (max-width:680px){.swatches{grid-template-columns:repeat(2,1fr)}}
+.swatch{
+  border:1px solid var(--border);border-radius:14px;overflow:hidden;background:var(--card)
+}
+.swatch .chip{height:96px;display:flex;align-items:flex-end;justify-content:flex-start;padding:10px}
+.swatch .chip .hex{font-family:"JetBrains Mono",monospace;font-size:11px;color:rgba(255,255,255,.85);
+  background:rgba(0,0,0,.35);padding:2px 7px;border-radius:6px;backdrop-filter:blur(4px)}
+.swatch .meta{padding:10px 12px;display:flex;justify-content:space-between;align-items:center}
+.swatch .meta .name{font-size:12px;font-weight:600}
+.swatch .meta .role{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.8px}
+
+/* Typography */
+.type{
+  background:var(--card);border:1px solid var(--border);border-radius:14px;padding:22px
+}
+.type-row{display:flex;justify-content:space-between;align-items:baseline;
+  border-bottom:1px dashed var(--border);padding:14px 0}
+.type-row:last-child{border-bottom:none}
+.type-row .sample{font-family:"Space Grotesk",sans-serif}
+.type-row .meta{font-size:11px;color:var(--muted);font-family:"JetBrains Mono",monospace}
+
+/* Construction */
+.construct{
+  background:
+    linear-gradient(rgba(255,255,255,.025) 1px, transparent 1px) 0 0/24px 24px,
+    linear-gradient(90deg, rgba(255,255,255,.025) 1px, transparent 1px) 0 0/24px 24px,
+    var(--card);
+  border:1px solid var(--border);border-radius:14px;
+  padding:34px;display:flex;align-items:center;justify-content:center;min-height:300px
+}
+
+/* Footer */
+footer{
+  margin-top:64px;padding:22px 4px;border-top:1px solid var(--border);
+  display:flex;justify-content:space-between;align-items:center;
+  font-size:11px;color:var(--dim);letter-spacing:.4px
+}
+footer a{color:var(--green);text-decoration:none}
+
+/* Reusable mark sizing */
+.mk-12{height:12px}
+.mk-18{height:18px}
+.mk-24{height:24px}
+.mk-32{height:32px}
+.mk-44{height:44px}
+.mk-64{height:64px}
+.mk-96{height:96px}
+.mk-160{height:160px}
+</style>
+</head>
+<body>
+
+<!-- ===========================================================
+     REUSABLE SVG SYMBOLS
+     The "A" mark is built from two ascending strokes that read as
+     an upward chart trajectory; the small node in the apex acts as
+     the "intelligence" dot — the AGI inside the capital.
+     =========================================================== -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+
+    <!-- Gradient for the mark -->
+    <linearGradient id="agi-grad" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0%"  stop-color="#00b894"/>
+      <stop offset="55%" stop-color="#00d4aa"/>
+      <stop offset="100%" stop-color="#5dffd4"/>
+    </linearGradient>
+
+    <!-- ICON: the 'A' mark, square 64x64 viewBox -->
+    <symbol id="agi-mark" viewBox="0 0 64 64">
+      <!-- Subtle ring -->
+      <circle cx="32" cy="32" r="30.5" fill="none" stroke="currentColor" stroke-opacity=".14" stroke-width="1"/>
+      <!-- Left leg of A: rising stroke -->
+      <path d="M14 49 L30 16" stroke="currentColor" stroke-width="5.2" stroke-linecap="round" fill="none"/>
+      <!-- Right leg of A: rising stroke (steeper, evokes upward trend) -->
+      <path d="M50 49 L34 16" stroke="currentColor" stroke-width="5.2" stroke-linecap="round" fill="none"/>
+      <!-- Crossbar with a notch break that reads as a chart tick -->
+      <path d="M22 36 L34 36" stroke="currentColor" stroke-width="3.6" stroke-linecap="round" fill="none"/>
+      <!-- Apex node — the AGI dot -->
+      <circle cx="32" cy="14.4" r="3.2" fill="currentColor"/>
+    </symbol>
+
+    <!-- ICON gradient variant (for the hero) -->
+    <symbol id="agi-mark-grad" viewBox="0 0 64 64">
+      <circle cx="32" cy="32" r="30.5" fill="none" stroke="url(#agi-grad)" stroke-opacity=".22" stroke-width="1"/>
+      <path d="M14 49 L30 16" stroke="url(#agi-grad)" stroke-width="5.2" stroke-linecap="round" fill="none"/>
+      <path d="M50 49 L34 16" stroke="url(#agi-grad)" stroke-width="5.2" stroke-linecap="round" fill="none"/>
+      <path d="M22 36 L34 36" stroke="url(#agi-grad)" stroke-width="3.6" stroke-linecap="round" fill="none"/>
+      <circle cx="32" cy="14.4" r="3.4" fill="url(#agi-grad)"/>
+    </symbol>
+
+    <!--
+      WORDMARK — drawn as text inside an SVG so it locks up
+      consistently with the mark at any size. Uses Space Grotesk.
+      "agi" is set in 700, "capital" in 400 to put weight on the brand
+      origin while keeping the descriptor calm.
+    -->
+    <symbol id="agi-wordmark" viewBox="0 0 320 64" preserveAspectRatio="xMinYMid meet">
+      <text x="0" y="46"
+            font-family="Space Grotesk, sans-serif"
+            font-size="48"
+            letter-spacing="-1.2"
+            fill="currentColor">
+        <tspan font-weight="700">agi</tspan><tspan font-weight="400" fill-opacity=".88">capital</tspan>
+      </text>
+    </symbol>
+
+    <!-- HORIZONTAL LOCKUP: mark + wordmark -->
+    <symbol id="agi-lockup" viewBox="0 0 420 64" preserveAspectRatio="xMinYMid meet">
+      <use href="#agi-mark" x="0" y="0" width="64" height="64"/>
+      <text x="84" y="46"
+            font-family="Space Grotesk, sans-serif"
+            font-size="48"
+            letter-spacing="-1.2"
+            fill="currentColor">
+        <tspan font-weight="700">agi</tspan><tspan font-weight="400" fill-opacity=".88">capital</tspan>
+      </text>
+    </symbol>
+
+    <!-- HERO LOCKUP: gradient mark + wordmark -->
+    <symbol id="agi-lockup-hero" viewBox="0 0 420 64" preserveAspectRatio="xMinYMid meet">
+      <use href="#agi-mark-grad" x="0" y="0" width="64" height="64"/>
+      <text x="84" y="46"
+            font-family="Space Grotesk, sans-serif"
+            font-size="48"
+            letter-spacing="-1.2"
+            fill="currentColor">
+        <tspan font-weight="700">agi</tspan><tspan font-weight="400" fill-opacity=".88">capital</tspan>
+      </text>
+    </symbol>
+
+    <!-- STACKED LOCKUP -->
+    <symbol id="agi-stacked" viewBox="0 0 200 200" preserveAspectRatio="xMidYMid meet">
+      <use href="#agi-mark" x="68" y="6" width="64" height="64"/>
+      <text x="100" y="118"
+            font-family="Space Grotesk, sans-serif"
+            font-size="34"
+            letter-spacing="-.8"
+            text-anchor="middle"
+            fill="currentColor">
+        <tspan font-weight="700">agi</tspan><tspan font-weight="400" fill-opacity=".88">capital</tspan>
+      </text>
+      <text x="100" y="142"
+            font-family="JetBrains Mono, monospace"
+            font-size="9"
+            letter-spacing="3"
+            text-anchor="middle"
+            fill="currentColor"
+            fill-opacity=".5">INTELLIGENT&#160;&#160;CAPITAL</text>
+    </symbol>
+
+    <!-- CONSTRUCTION DIAGRAM -->
+    <symbol id="agi-construct" viewBox="0 0 320 320">
+      <!-- bounding box -->
+      <rect x="32" y="32" width="256" height="256" rx="8"
+            fill="none" stroke="currentColor" stroke-opacity=".18" stroke-dasharray="4 4"/>
+      <!-- safe area -->
+      <rect x="64" y="64" width="192" height="192" rx="6"
+            fill="none" stroke="currentColor" stroke-opacity=".25" stroke-dasharray="2 4"/>
+      <!-- baseline & cap-line guides -->
+      <line x1="64" y1="232" x2="256" y2="232" stroke="currentColor" stroke-opacity=".22"/>
+      <line x1="64" y1="100" x2="256" y2="100" stroke="currentColor" stroke-opacity=".10"/>
+      <!-- center line -->
+      <line x1="160" y1="32" x2="160" y2="288" stroke="currentColor" stroke-opacity=".10"/>
+      <!-- the mark, scaled to fit -->
+      <g transform="translate(96 96) scale(2.0)">
+        <path d="M14 49 L30 16" stroke="currentColor" stroke-width="5.2" stroke-linecap="round" fill="none"/>
+        <path d="M50 49 L34 16" stroke="currentColor" stroke-width="5.2" stroke-linecap="round" fill="none"/>
+        <path d="M22 36 L34 36" stroke="currentColor" stroke-width="3.6" stroke-linecap="round" fill="none"/>
+        <circle cx="32" cy="14.4" r="3.2" fill="currentColor"/>
+      </g>
+      <!-- annotation ticks -->
+      <g font-family="JetBrains Mono, monospace" font-size="9" fill="currentColor" fill-opacity=".55">
+        <text x="40" y="100" text-anchor="end">cap</text>
+        <text x="40" y="232" text-anchor="end">base</text>
+        <text x="160" y="24" text-anchor="middle">axis</text>
+      </g>
+    </symbol>
+
+  </defs>
+</svg>
+
+
+<header>
+  <div class="crumb">Brand <span style="opacity:.4;margin:0 8px">/</span> <b>agicapital</b> <span style="opacity:.4;margin:0 8px">/</span> Logo system</div>
+  <span class="tag-pill">v1 · 2026</span>
+</header>
+
+<main>
+
+  <!-- ============== HERO ============== -->
+  <section class="hero" aria-label="Primary lockup">
+    <div class="lockup" style="display:flex;align-items:center;justify-content:center">
+      <svg class="mk-96" viewBox="0 0 420 64" preserveAspectRatio="xMidYMid meet" style="width:auto;color:#e6e7ea">
+        <use href="#agi-lockup-hero"/>
+      </svg>
+    </div>
+    <div class="tagline">Intelligent capital · built on signal, not noise</div>
+  </section>
+
+  <!-- ============== LOCKUPS ============== -->
+  <div class="section-head">
+    <h2>01 — Logo system</h2>
+    <span class="meta">SVG · scalable · monoline</span>
+  </div>
+
+  <div class="grid c3">
+    <div class="card">
+      <div class="stage">
+        <svg class="mk-44" viewBox="0 0 420 64" style="width:auto;color:var(--text)"><use href="#agi-lockup"/></svg>
+      </div>
+      <div class="label"><span>Horizontal lockup</span><span class="swatch-name">primary</span></div>
+    </div>
+
+    <div class="card">
+      <div class="stage">
+        <svg viewBox="0 0 200 200" style="height:160px;width:auto;color:var(--text)"><use href="#agi-stacked"/></svg>
+      </div>
+      <div class="label"><span>Stacked lockup</span><span class="swatch-name">with descriptor</span></div>
+    </div>
+
+    <div class="card">
+      <div class="stage" style="gap:24px;flex-direction:column">
+        <svg class="mk-64" viewBox="0 0 64 64" style="color:var(--green)"><use href="#agi-mark"/></svg>
+        <svg class="mk-32" viewBox="0 0 320 64" style="width:auto;color:var(--text)"><use href="#agi-wordmark"/></svg>
+      </div>
+      <div class="label"><span>Mark + wordmark</span><span class="swatch-name">separable</span></div>
+    </div>
+  </div>
+
+  <!-- ============== ON BACKGROUNDS ============== -->
+  <div class="section-head">
+    <h2>02 — Surfaces</h2>
+    <span class="meta">contrast checked AA</span>
+  </div>
+
+  <div class="grid c4">
+    <div class="card">
+      <div class="stage">
+        <svg class="mk-32" viewBox="0 0 420 64" style="width:auto;color:var(--text)"><use href="#agi-lockup"/></svg>
+      </div>
+      <div class="label"><span>On midnight</span><span class="swatch-name">#0a0a0f</span></div>
+    </div>
+
+    <div class="card gradient">
+      <div class="stage">
+        <svg class="mk-32" viewBox="0 0 420 64" style="width:auto;color:#e6fffb"><use href="#agi-lockup"/></svg>
+      </div>
+      <div class="label" style="color:#9aa">
+        <span>On signal</span><span class="swatch-name">accent fade</span>
+      </div>
+    </div>
+
+    <div class="card light">
+      <div class="stage">
+        <svg class="mk-32" viewBox="0 0 420 64" style="width:auto;color:#0a0a0f"><use href="#agi-lockup"/></svg>
+      </div>
+      <div class="label"><span>On bone</span><span class="swatch-name">#f4f5f7</span></div>
+    </div>
+
+    <div class="card invert">
+      <div class="stage" style="gap:14px">
+        <svg class="mk-32" viewBox="0 0 64 64" style="color:#00b894"><use href="#agi-mark"/></svg>
+        <svg class="mk-24" viewBox="0 0 320 64" style="width:auto;color:#0a0a0f"><use href="#agi-wordmark"/></svg>
+      </div>
+      <div class="label"><span>On white</span><span class="swatch-name">#ffffff</span></div>
+    </div>
+  </div>
+
+  <!-- ============== SCALES ============== -->
+  <div class="section-head">
+    <h2>03 — Scale &amp; favicons</h2>
+    <span class="meta">readable from 12px to 160px</span>
+  </div>
+
+  <div class="card" style="min-height:0">
+    <div class="stage" style="gap:32px;flex-wrap:wrap;justify-content:flex-start">
+      <svg viewBox="0 0 64 64" style="width:12px;height:12px;color:var(--green)"><use href="#agi-mark"/></svg>
+      <svg viewBox="0 0 64 64" style="width:18px;height:18px;color:var(--green)"><use href="#agi-mark"/></svg>
+      <svg viewBox="0 0 64 64" style="width:24px;height:24px;color:var(--green)"><use href="#agi-mark"/></svg>
+      <svg viewBox="0 0 64 64" style="width:32px;height:32px;color:var(--green)"><use href="#agi-mark"/></svg>
+      <svg viewBox="0 0 64 64" style="width:48px;height:48px;color:var(--green)"><use href="#agi-mark"/></svg>
+      <svg viewBox="0 0 64 64" style="width:64px;height:64px;color:var(--green)"><use href="#agi-mark"/></svg>
+      <svg viewBox="0 0 64 64" style="width:96px;height:96px;color:var(--green)"><use href="#agi-mark"/></svg>
+      <svg viewBox="0 0 64 64" style="width:160px;height:160px;color:var(--green)"><use href="#agi-mark-grad"/></svg>
+    </div>
+    <div class="label"><span>Mark scale ramp</span><span class="swatch-name">12 → 160px</span></div>
+  </div>
+
+  <!-- ============== CONSTRUCTION ============== -->
+  <div class="section-head">
+    <h2>04 — Construction</h2>
+    <span class="meta">grid · proportions · safe area</span>
+  </div>
+
+  <div class="grid c2">
+    <div class="construct">
+      <svg viewBox="0 0 320 320" style="width:280px;height:280px;color:var(--text)">
+        <use href="#agi-construct"/>
+      </svg>
+    </div>
+    <div class="card" style="padding:26px;justify-content:center">
+      <div class="label"><span>Concept</span><span class="swatch-name">rationale</span></div>
+      <p style="margin:6px 0 0;color:var(--text);line-height:1.6">
+        The mark is an <b>“A”</b> built from two ascending strokes — a candlestick wick rising,
+        a portfolio curve trending up. The crossbar is broken into a chart tick, and a single
+        node sits at the apex: the <b>AGI dot</b>, the intelligence inside the capital.
+      </p>
+      <ul style="margin:12px 0 0;padding-left:18px;color:var(--muted);font-size:13px;line-height:1.7">
+        <li>Monoline — same stroke weight at every size</li>
+        <li>Geometric base — circle &amp; isosceles triangle on a 32&times;32 grid</li>
+        <li>Right leg pitched 2&deg; steeper to suggest forward momentum</li>
+        <li>Apex node sized to read at 12px favicon</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- ============== COLOR ============== -->
+  <div class="section-head">
+    <h2>05 — Color</h2>
+    <span class="meta">terminal-grade contrast</span>
+  </div>
+
+  <div class="swatches">
+    <div class="swatch">
+      <div class="chip" style="background:#00d4aa"><span class="hex">#00D4AA</span></div>
+      <div class="meta"><span class="name">Signal</span><span class="role">primary</span></div>
+    </div>
+    <div class="swatch">
+      <div class="chip" style="background:#00b894"><span class="hex">#00B894</span></div>
+      <div class="meta"><span class="name">Signal · deep</span><span class="role">on light</span></div>
+    </div>
+    <div class="swatch">
+      <div class="chip" style="background:#0a0a0f"><span class="hex">#0A0A0F</span></div>
+      <div class="meta"><span class="name">Midnight</span><span class="role">surface</span></div>
+    </div>
+    <div class="swatch">
+      <div class="chip" style="background:#f4f5f7"><span class="hex">#F4F5F7</span></div>
+      <div class="meta" style="color:#5a5e6b"><span class="name" style="color:#0a0a0f">Bone</span><span class="role">surface · alt</span></div>
+    </div>
+  </div>
+
+  <!-- ============== TYPOGRAPHY ============== -->
+  <div class="section-head">
+    <h2>06 — Typography</h2>
+    <span class="meta">Space Grotesk · JetBrains Mono</span>
+  </div>
+
+  <div class="type">
+    <div class="type-row">
+      <div class="sample" style="font-size:36px;font-weight:700;letter-spacing:-1px">agicapital</div>
+      <div class="meta">Space Grotesk · 700 · -1</div>
+    </div>
+    <div class="type-row">
+      <div class="sample" style="font-size:24px;font-weight:500">Intelligent capital, built on signal</div>
+      <div class="meta">Space Grotesk · 500</div>
+    </div>
+    <div class="type-row">
+      <div class="sample" style="font-size:14px;font-weight:400;color:var(--muted);max-width:60%">
+        Late-window momentum trading on Polymarket binaries, scored across five
+        confidence factors and executed maker-only over a Binance latency edge.
+      </div>
+      <div class="meta">Space Grotesk · 400</div>
+    </div>
+    <div class="type-row">
+      <div class="sample mono" style="font-size:13px;color:var(--green)">$ agicapital --live --confidence 0.74</div>
+      <div class="meta">JetBrains Mono · 500</div>
+    </div>
+  </div>
+
+  <!-- ============== APPLICATION PREVIEW ============== -->
+  <div class="section-head">
+    <h2>07 — In situ</h2>
+    <span class="meta">dashboard header preview</span>
+  </div>
+
+  <div class="card" style="padding:0;overflow:hidden">
+    <div style="background:rgba(10,10,15,.72);backdrop-filter:blur(14px);border-bottom:1px solid var(--border);
+                padding:12px 16px;display:flex;align-items:center;justify-content:space-between;gap:14px">
+      <div style="display:flex;align-items:center;gap:12px">
+        <span style="width:9px;height:9px;border-radius:50%;background:var(--green);box-shadow:0 0 10px var(--green)"></span>
+        <svg viewBox="0 0 420 64" style="height:22px;width:auto;color:var(--text)"><use href="#agi-lockup"/></svg>
+        <span class="tag-pill" style="margin-left:6px">LIVE</span>
+      </div>
+      <div style="display:flex;gap:18px;font-family:'JetBrains Mono',monospace;font-size:12px">
+        <div style="display:flex;flex-direction:column;align-items:flex-end">
+          <span style="font-size:9px;color:var(--muted);letter-spacing:.6px;text-transform:uppercase">BTC</span>
+          <span style="font-weight:600">$104,217</span>
+        </div>
+        <div style="display:flex;flex-direction:column;align-items:flex-end">
+          <span style="font-size:9px;color:var(--muted);letter-spacing:.6px;text-transform:uppercase">Today</span>
+          <span style="font-weight:600;color:var(--green)">+$48.20</span>
+        </div>
+      </div>
+    </div>
+    <div style="padding:32px;color:var(--muted);font-size:12px;text-align:center">
+      Header preview — drop the <span class="mono" style="color:var(--text)">#agi-lockup</span> symbol
+      into <span class="mono" style="color:var(--text)">dashboard/index.html</span> to replace the existing brand string.
+    </div>
+  </div>
+
+  <footer>
+    <span>agicapital · brand v1 · 2026</span>
+    <span><a href="#">github</a> &nbsp;·&nbsp; <a href="#">dashboard</a></span>
+  </footer>
+
+</main>
+
+</body>
+</html>
