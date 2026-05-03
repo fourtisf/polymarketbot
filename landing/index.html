@@ -111,6 +111,40 @@ section.block{padding:80px 0;border-top:1px solid var(--border)}
 .step h3{font-size:18px;font-weight:700;margin-bottom:8px;letter-spacing:-.01em}
 .step p{font-size:14px;color:var(--muted);line-height:1.6}
 
+/* Trades table */
+.trades-card{background:linear-gradient(180deg,rgba(255,255,255,.025),rgba(255,255,255,0));
+  background-color:var(--card);border:1px solid var(--border);border-radius:16px;padding:24px;
+  box-shadow:0 0 60px rgba(0,212,170,.05),0 20px 60px rgba(0,0,0,.3)}
+.trades-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px}
+.trades-label{font-size:11px;font-weight:700;letter-spacing:.7px;color:var(--muted);text-transform:uppercase}
+.trades-scroll{overflow-x:auto;margin:0 -8px}
+.trades-scroll::-webkit-scrollbar{height:6px}
+.trades-scroll::-webkit-scrollbar-thumb{background:rgba(255,255,255,.08);border-radius:8px}
+.trades-table{width:100%;border-collapse:collapse;font-size:13px;min-width:560px}
+.trades-table th{text-align:left;font-weight:700;color:var(--muted);font-size:10px;
+  letter-spacing:.7px;text-transform:uppercase;padding:10px 12px;border-bottom:1px solid var(--border)}
+.trades-table th.r{text-align:right}
+.trades-table td{padding:14px 12px;border-bottom:1px solid rgba(255,255,255,.04);
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-variant-numeric:tabular-nums;
+  white-space:nowrap}
+.trades-table td.r{text-align:right}
+.trades-table tr:last-child td{border-bottom:none}
+.trades-table tbody tr{transition:background .12s}
+.trades-table tbody tr:hover{background:rgba(255,255,255,.025)}
+.trades-table .pos{color:var(--green);font-weight:700}
+.trades-table .neg{color:var(--red);font-weight:700}
+.trades-table .reason{color:var(--muted);font-family:"Inter",sans-serif;font-size:12px;
+  white-space:normal;max-width:280px}
+.tag-side{display:inline-block;padding:3px 10px;border-radius:6px;font-size:11px;font-weight:700;
+  letter-spacing:.5px;font-family:"Inter",sans-serif}
+.tag-side.up{background:rgba(0,212,170,.14);color:var(--green)}
+.tag-side.dn{background:rgba(255,71,87,.12);color:var(--red)}
+.empty{text-align:center;color:var(--dim);padding:32px 12px;font-family:"Inter",sans-serif !important}
+@media (max-width:640px){
+  .trades-table .hide-sm{display:none}
+  .trades-table{min-width:0}
+}
+
 /* CTA */
 .cta-final{padding:96px 0;text-align:center;border-top:1px solid var(--border)}
 .cta-final h2{font-size:42px;font-weight:800;letter-spacing:-.025em;margin-bottom:14px}
@@ -227,6 +261,39 @@ footer{padding:32px 0;border-top:1px solid var(--border);color:var(--muted);font
   </div>
 </section>
 
+<section class="block" id="performance">
+  <div class="container">
+    <div class="section-head">
+      <div class="eyebrow">Performance</div>
+      <h2>Every trade, on the record.</h2>
+      <p>The full trading log — updated in real time. No edits, no replays, no excuses.</p>
+    </div>
+    <div class="trades-card">
+      <div class="trades-head">
+        <span class="trades-label">Recent trades</span>
+        <span class="live-pill"><span class="live-dot"></span>Live</span>
+      </div>
+      <div class="trades-scroll">
+        <table class="trades-table">
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>Side</th>
+              <th class="r">Entry</th>
+              <th class="r">P&amp;L</th>
+              <th class="r hide-sm">Score</th>
+              <th class="hide-sm">Reason</th>
+            </tr>
+          </thead>
+          <tbody id="tradesBody">
+            <tr><td colspan="6" class="empty">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</section>
+
 <section class="block" id="how">
   <div class="container">
     <div class="section-head">
@@ -254,7 +321,7 @@ footer{padding:32px 0;border-top:1px solid var(--border);color:var(--muted);font
   </div>
 </section>
 
-<section class="cta-final" id="performance">
+<section class="cta-final">
   <div class="container">
     <h2>The numbers are <span style="color:var(--green)">live</span>.</h2>
     <p>No backtest. No paper trading. Real positions, real P&amp;L — updating every 5 minutes.</p>
@@ -365,9 +432,50 @@ footer{padding:32px 0;border-top:1px solid var(--border);color:var(--muted);font
     }catch(e){}
   }
 
-  loadStats(); loadActivity();
+  function escapeHtml(s){
+    return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+  }
+
+  async function loadTradesTable(){
+    try{
+      const r = await fetch(API + "/api/trades?limit=20");
+      if(!r.ok) throw new Error(r.status);
+      const all = await r.json();
+      const trades = (all || []).filter(t => t.pnl != null && t.side !== "SKIP");
+      const tbody = $("tradesBody");
+      if(!trades.length){
+        tbody.innerHTML = '<tr><td colspan="6" class="empty">Waiting for first trade…</td></tr>';
+        return;
+      }
+      tbody.innerHTML = trades.map(t => {
+        const time = new Date((t.ts||0)*1000).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+        const sideClass = t.side === "UP" ? "up" : "dn";
+        const pnlClass = t.pnl >= 0 ? "pos" : "neg";
+        const sign = t.pnl >= 0 ? "+" : "";
+        const entry = t.entry_price != null ? "$" + Number(t.entry_price).toFixed(3) : "—";
+        const score = t.confidence || (t.reason_log && t.reason_log.score) || "—";
+        const rl = t.reason_log || {};
+        const reason = rl.delta_pct != null
+          ? "Δ" + Number(rl.delta_pct).toFixed(3) + "% · " + (rl.delta_trend || "—")
+          : (rl.skip_reason || "—");
+        return '<tr>'
+          + '<td>' + time + '</td>'
+          + '<td><span class="tag-side ' + sideClass + '">' + escapeHtml(t.side) + '</span></td>'
+          + '<td class="r">' + entry + '</td>'
+          + '<td class="r ' + pnlClass + '">' + sign + fmt(t.pnl, 2) + '</td>'
+          + '<td class="r hide-sm">' + escapeHtml(String(score)) + '</td>'
+          + '<td class="reason hide-sm">' + escapeHtml(reason) + '</td>'
+          + '</tr>';
+      }).join("");
+    }catch(e){
+      $("tradesBody").innerHTML = '<tr><td colspan="6" class="empty">Trade feed unavailable</td></tr>';
+    }
+  }
+
+  loadStats(); loadActivity(); loadTradesTable();
   setInterval(loadStats, 15000);
   setInterval(loadActivity, 15000);
+  setInterval(loadTradesTable, 15000);
   setInterval(tickCountdown, 1000);
 })();
 </script>
