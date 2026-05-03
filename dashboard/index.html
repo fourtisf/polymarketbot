@@ -254,7 +254,7 @@ tbody tr.skip{color:var(--dim)}
 .token-cta h2{font-size:clamp(28px,4vw,42px);margin:0 0 12px;font-weight:800;letter-spacing:-.8px}
 .token-cta p{color:var(--muted);max-width:560px;margin:0 auto 24px;font-size:15px;line-height:1.6}
 .token-cta .actions{display:flex;gap:10px;justify-content:center;flex-wrap:wrap}
-.token-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;max-width:760px;margin:28px auto 0}
+.token-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;max-width:620px;margin:28px auto 0}
 @media (max-width:680px){.token-stats{grid-template-columns:repeat(2,1fr)}}
 .token-stats .ts{background:rgba(255,255,255,.025);border:1px solid var(--border);border-radius:10px;padding:12px}
 .token-stats .ts .lbl{font-size:10.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.7px;font-weight:600}
@@ -291,7 +291,7 @@ footer p{margin:0}
 <body>
 
 <div class="ribbon">
-  <b>Strategy validation phase</b> · $10K paper-trading on live market data · live deployment funded by <a href="#token">$AGI token launch →</a>
+  <b>$AGI launching on pump.fun</b> · CA drops here when live · <a href="#token">get notified →</a>
 </div>
 
 <header>
@@ -616,29 +616,33 @@ footer p{margin:0}
 <!-- ─── Token CTA ───────────────────────────────── -->
 <section class="block" id="token">
   <div class="token-cta">
-    <div class="eyebrow">Coming soon</div>
+    <div class="eyebrow">Launching on pump.fun</div>
     <h2>$AGI · funds the live trading desk.</h2>
     <p>
       The strategy is validated. The token launch unlocks the treasury that deploys it live.
-      40% of $AGI supply funds real-money execution on Polymarket; holders share fee flow from
-      the live desk and get priority on upcoming strategies (ETH 5m, perps funding, sports-book arb).
-      Whitelist closes when the cap fills.
+      Trading-fee revenue flows back to holders; priority access to upcoming strategies
+      (ETH 5m, perps funding, sports-book arb). Fair-launch on pump.fun — no presale,
+      no whitelist, no insider allocation.
     </p>
+    <div style="background:rgba(255,170,40,.08);border:1px dashed rgba(255,170,40,.35);border-radius:10px;padding:14px 18px;max-width:520px;margin:8px auto 22px;font-size:13px;color:#f4d28a">
+      <b style="color:var(--amber)">CA not yet listed.</b> Contract address will be posted here and on
+      our Telegram the moment we deploy on pump.fun. Beware of fake $AGI tokens before launch.
+    </div>
     <div class="actions">
-      <a class="cta" href="https://t.me/agicapital_bot" target="_blank" rel="noopener">Claim whitelist spot →</a>
+      <a class="cta" href="https://t.me/agicapital_bot" target="_blank" rel="noopener">Get launch alerts on Telegram →</a>
       <a class="cta ghost" href="#trust">Read the docs</a>
     </div>
     <div class="token-stats">
-      <div class="ts"><div class="lbl">Supply</div><div class="val mono">100,000,000</div></div>
-      <div class="ts"><div class="lbl">Public sale</div><div class="val mono">15%</div></div>
+      <div class="ts"><div class="lbl">Launch venue</div><div class="val mono">pump.fun</div></div>
       <div class="ts"><div class="lbl">Treasury → live desk</div><div class="val mono">40%</div></div>
       <div class="ts"><div class="lbl">Team (vested 24m)</div><div class="val mono">15%</div></div>
     </div>
     <p style="margin-top:22px;font-size:11.5px;color:var(--dim);max-width:640px;line-height:1.5">
-      Disclaimer: $AGI is a utility token. Performance shown above is paper-trading simulation and
-      does not represent live trading results. Live deployment, returns, and fee flow depend on
-      strategy performance under real-market conditions post-launch. Crypto involves substantial
-      risk of loss. Not financial advice. Not available in restricted jurisdictions.
+      Disclaimer: $AGI is a utility token launched on pump.fun (Solana). Performance shown above is
+      paper-trading simulation and does not represent live trading results. Live deployment, returns,
+      and fee flow depend on strategy performance under real-market conditions post-launch.
+      Pump.fun launches are highly volatile and speculative. Crypto involves substantial risk of
+      loss. Not financial advice. Not available in restricted jurisdictions.
     </p>
   </div>
 </section>
