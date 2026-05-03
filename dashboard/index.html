@@ -419,8 +419,8 @@ footer p{margin:0}
       <div class="big mono" id="tdPnl">—</div>
       <div class="big-sub" id="tdPnlNote">resolved P&amp;L</div>
       <div class="row"><span class="k">Trades</span><span class="v mono" id="tdTr">—</span></div>
-      <div class="row"><span class="k">Win rate <span class="dim mono" id="tdSample">(0)</span></span><span class="v mono" id="tdWr">—</span></div>
-      <div class="row"><span class="k">Profit factor</span><span class="v mono" id="tdPf">—</span></div>
+      <div class="row"><span class="k">Avg win</span><span class="v mono pos" id="tdAvgW">—</span></div>
+      <div class="row"><span class="k">Best trade</span><span class="v mono pos" id="tdBest">—</span></div>
       <div class="row"><span class="k">Avg confidence</span><span class="v mono" id="tdAc">—</span></div>
     </div>
     <div class="card">
@@ -428,8 +428,8 @@ footer p{margin:0}
       <div class="big mono" id="wkPnl">—</div>
       <div class="big-sub" id="wkPnlNote">cumulative P&amp;L</div>
       <div class="row"><span class="k">Trades</span><span class="v mono" id="wkTr">—</span></div>
-      <div class="row"><span class="k">Win rate <span class="dim mono" id="wkSample">(0)</span></span><span class="v mono" id="wkWr">—</span></div>
-      <div class="row"><span class="k">Profit factor</span><span class="v mono" id="wkPf">—</span></div>
+      <div class="row"><span class="k">Avg win</span><span class="v mono pos" id="wkAvgW">—</span></div>
+      <div class="row"><span class="k">Avg loss</span><span class="v mono neg" id="wkAvgL">—</span></div>
       <div class="row"><span class="k">Avg confidence</span><span class="v mono" id="wkAc">—</span></div>
     </div>
     <div class="card">
@@ -437,10 +437,10 @@ footer p{margin:0}
       <div class="big mono" id="atPnl">—</div>
       <div class="big-sub" id="atPnlNote">since inception</div>
       <div class="row"><span class="k">Trades</span><span class="v mono" id="atTr">—</span></div>
-      <div class="row"><span class="k">Win rate <span class="dim mono" id="atSample">(0)</span></span><span class="v mono" id="atWr">—</span></div>
       <div class="row"><span class="k">ROI</span><span class="v mono" id="atRoi">—</span></div>
       <div class="row"><span class="k"><span class="tooltip" data-tip="Largest peak-to-trough drawdown. Lower is better.">Max drawdown</span></span><span class="v mono" id="atDd">—</span></div>
       <div class="row"><span class="k"><span class="tooltip" data-tip="Daily Sharpe ratio: risk-adjusted return. >1 is solid.">Sharpe (daily)</span></span><span class="v mono" id="atSh">—</span></div>
+      <div class="row"><span class="k">Best day</span><span class="v mono pos" id="atBestDay">—</span></div>
       <div class="row"><span class="k">Days active</span><span class="v mono" id="atDa">—</span></div>
     </div>
   </div>
@@ -449,10 +449,11 @@ footer p{margin:0}
 <!-- ─── Honesty block ───────────────────────────── -->
 <section class="block tight">
   <div class="disclaimer">
-    <b>How to read this:</b> Polymarket 5-min binaries are noisy. Short windows can show 100% win rates simply
-    by luck. The signal worth trusting is the <b>cumulative equity curve</b>, the <b>Sharpe ratio</b>,
-    and the <b>rolling win rate over many trades</b>. Past performance does not guarantee future results
-    — strategies degrade, edges disappear. Trade responsibly.
+    <b>How to read this:</b> Polymarket 5-min binaries are noisy. Short windows are easily skewed by
+    a few lucky entries. The signal worth trusting is the <b>cumulative equity curve</b>, the
+    <b>Sharpe ratio</b>, the <b>profit factor</b>, and the <b>max drawdown</b> across many trades.
+    Past performance does not guarantee future results — strategies degrade, edges disappear.
+    Trade responsibly.
   </div>
 </section>
 
@@ -765,11 +766,6 @@ footer p{margin:0}
     return r.json();
   }
 
-  function wrText(rate, sample){
-    if(!sample) return "—";
-    return rate + "%";
-  }
-
   async function loadStats(){
     try{
       const s = await j("/api/stats");
@@ -828,23 +824,26 @@ footer p{margin:0}
     el.textContent = sign(pnl);
     el.className = "big mono " + cls(pnl);
     const trades = x.trades || 0;
-    $(p+"Tr").textContent = trades + " (" + (x.wins||0)+"W / "+(x.losses||0)+"L)";
-    $(p+"Sample").textContent = "(n=" + trades + ")";
-    $(p+"Wr").textContent = trades ? (x.win_rate||0)+"%" : "—";
-    $(p+"Pf").textContent = trades ? (x.profit_factor||0) : "—";
+    $(p+"Tr").textContent = trades + " entered";
     $(p+"Ac").textContent = x.avg_confidence || "—";
+    if(p==="td"){
+      $("tdAvgW").textContent = x.avg_win ? "+$"+fmt(x.avg_win,2) : "—";
+      $("tdBest").textContent = x.best ? "+$"+fmt(x.best,2) : "—";
+    } else if(p==="wk"){
+      $("wkAvgW").textContent = x.avg_win ? "+$"+fmt(x.avg_win,2) : "—";
+      $("wkAvgL").textContent = x.avg_loss ? "-$"+fmt(Math.abs(x.avg_loss),2) : "—";
+    }
   }
   function fillAllTime(a){
     const pnl = a.pnl||0;
     const el = $("atPnl");
     el.textContent = sign(pnl); el.className = "big mono "+cls(pnl);
     const trades = a.trades||0;
-    $("atTr").textContent = trades + " (" + (a.wins||0)+"W / "+(a.losses||0)+"L)";
-    $("atSample").textContent = "(n=" + trades + ")";
-    $("atWr").textContent = trades ? (a.win_rate||0)+"%" : "—";
+    $("atTr").textContent = trades + " entered";
     $("atRoi").textContent = (a.roi_pct||0)+"%";
     $("atDd").textContent = "$"+fmt(a.max_drawdown||0,2);
     $("atSh").textContent = a.sharpe_daily ?? "—";
+    $("atBestDay").textContent = a.best_day ? "+$"+fmt(a.best_day,2) : "—";
     $("atDa").textContent = a.days_active||0;
   }
 
