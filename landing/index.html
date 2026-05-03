@@ -73,13 +73,14 @@ h1 .accent{color:var(--green)}
 .stats-delta{font-size:13px;font-weight:600;color:var(--muted);margin-bottom:18px}
 .stats-delta .pos{color:var(--green)}
 .stats-delta .neg{color:var(--red)}
-.pnl-wrap{margin:0 -4px 18px;position:relative}
-.pnl-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;padding:0 4px}
-.pnl-label{font-size:10px;font-weight:700;letter-spacing:.7px;color:var(--muted);text-transform:uppercase}
-.pnl-meta{font-size:11px;font-weight:600;color:var(--green);letter-spacing:.2px}
-.pnl-wrap svg{width:100%;height:130px;display:block;overflow:visible}
-.pnl-wrap svg rect{transition:opacity .15s}
-.pnl-wrap svg rect:hover{opacity:1 !important}
+.info-panel{margin:18px 0;padding:14px 0;border-top:1px solid var(--border);border-bottom:1px solid var(--border)}
+.info-row{display:flex;justify-content:space-between;align-items:baseline;padding:7px 0}
+.info-row+.info-row{border-top:1px solid rgba(255,255,255,.04)}
+.info-key{font-size:10px;font-weight:700;letter-spacing:.7px;color:var(--muted);text-transform:uppercase}
+.info-val{font-size:13px;font-weight:600;color:var(--text);letter-spacing:-.005em;text-align:right}
+.info-val .pos{color:var(--green)}
+.info-val .neg{color:var(--red)}
+.info-val .arrow{display:inline-block;margin-right:2px;font-size:14px;line-height:1;vertical-align:-1px}
 .stats-row{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
 .stat-cell{background:rgba(255,255,255,.025);border:1px solid var(--border);border-radius:10px;padding:12px}
 .stat-cell .lbl{font-size:9px;font-weight:700;letter-spacing:.7px;color:var(--muted);text-transform:uppercase;margin-bottom:4px}
@@ -170,12 +171,19 @@ footer{padding:32px 0;border-top:1px solid var(--border);color:var(--muted);font
       </div>
       <div class="stats-balance mono" id="balance">$—</div>
       <div class="stats-delta mono"><span id="deltaToday">—</span> today · <span id="deltaPct">—</span></div>
-      <div class="pnl-wrap">
-        <div class="pnl-head">
-          <span class="pnl-label">P&amp;L per trade</span>
-          <span class="pnl-meta mono"><span id="pnlCount">0</span> trades</span>
+      <div class="info-panel">
+        <div class="info-row">
+          <span class="info-key">Strategy</span>
+          <span class="info-val">BTC 5m · Momentum</span>
         </div>
-        <svg id="pnlChart" viewBox="0 0 600 130" preserveAspectRatio="none" aria-label="PnL per trade chart"></svg>
+        <div class="info-row">
+          <span class="info-key">Latest trade</span>
+          <span class="info-val mono" id="latestTradeText">—</span>
+        </div>
+        <div class="info-row">
+          <span class="info-key">Next window</span>
+          <span class="info-val mono" id="nextWindow">—</span>
+        </div>
       </div>
       <div class="stats-row">
         <div class="stat-cell"><div class="lbl">Trades</div><div class="val mono" id="trades">—</div></div>
@@ -309,55 +317,58 @@ footer{padding:32px 0;border-top:1px solid var(--border);color:var(--muted);font
     }
   }
 
-  function escapeAttr(s){ return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
+  function formatAgo(seconds){
+    const s = Math.max(0, Math.floor(seconds));
+    if(s < 60) return s + "s ago";
+    if(s < 3600) return Math.floor(s/60) + "m ago";
+    if(s < 86400) return Math.floor(s/3600) + "h ago";
+    return Math.floor(s/86400) + "d ago";
+  }
 
-  async function loadPnLBars(){
+  let nextWindowSeconds = null;
+  function tickCountdown(){
+    if(nextWindowSeconds == null){
+      $("nextWindow").textContent = "—";
+      return;
+    }
+    const s = nextWindowSeconds;
+    const m = (s/60)|0, r = s%60;
+    $("nextWindow").textContent = "in " + (m<10?"0":"") + m + ":" + (r<10?"0":"") + r;
+    if(nextWindowSeconds > 0) nextWindowSeconds--;
+  }
+
+  async function loadActivity(){
     try{
-      const r = await fetch(API + "/api/trades?limit=40");
-      if(!r.ok) throw new Error(r.status);
-      const trades = await r.json();
-      // API returns newest first — reverse so oldest is on the left
-      const withPnL = trades.filter(t => t.pnl != null && t.side !== "SKIP").reverse();
-      const svg = $("pnlChart");
-      const W = 600, H = 130, pad = 6;
-      const zero = H / 2;
+      const [trades, win] = await Promise.all([
+        fetch(API + "/api/trades?limit=5").then(r => r.ok ? r.json() : []).catch(() => []),
+        fetch(API + "/api/window").then(r => r.ok ? r.json() : null).catch(() => null)
+      ]);
 
-      $("pnlCount").textContent = withPnL.length;
-
-      if(!withPnL.length){
-        svg.innerHTML = '<line x1="'+pad+'" y1="'+zero+'" x2="'+(W-pad)+'" y2="'+zero+'" stroke="rgba(255,255,255,.06)" stroke-width="1" stroke-dasharray="3 3"/>'
-          + '<text x="'+(W/2)+'" y="'+(zero+5)+'" text-anchor="middle" fill="#5a5e6b" font-size="11" font-weight="600" font-family="Inter,sans-serif">Waiting for first trade…</text>';
-        return;
+      // Latest trade
+      const realTrades = (trades || []).filter(t => t.pnl != null && t.side !== "SKIP");
+      const latest = realTrades[0];
+      const el = $("latestTradeText");
+      if(latest){
+        const sign = latest.pnl >= 0 ? "+" : "";
+        const cls = latest.pnl >= 0 ? "pos" : "neg";
+        const arrow = latest.side === "UP" ? "↗" : (latest.side === "DOWN" ? "↘" : "·");
+        const ago = formatAgo((Date.now()/1000) - (latest.ts || 0));
+        el.innerHTML = '<span class="' + cls + '"><span class="arrow">' + arrow + '</span>' + latest.side + ' ' + sign + '$' + fmt(latest.pnl, 2) + '</span> · ' + ago;
+      }else{
+        el.textContent = "No trades yet";
       }
 
-      const n = withPnL.length;
-      const minBarW = 4, maxBarW = 26, idealGap = 4;
-      const fitW = (W - pad*2 - idealGap*(n-1)) / n;
-      const barW = Math.max(minBarW, Math.min(maxBarW, fitW));
-      const totalUsed = barW * n + idealGap * Math.max(0, n - 1);
-      const startX = (W - totalUsed) / 2;
-      const maxAbs = Math.max(...withPnL.map(t => Math.abs(t.pnl)), 0.5);
-      const scale = (zero - pad - 4) / maxAbs;
-
-      let html = '<line x1="'+pad+'" y1="'+zero+'" x2="'+(W-pad)+'" y2="'+zero+'" stroke="rgba(255,255,255,.08)" stroke-width="1" stroke-dasharray="3 3"/>';
-      withPnL.forEach((t, i) => {
-        const x = startX + i * (barW + idealGap);
-        const h = Math.max(2, Math.abs(t.pnl) * scale);
-        const y = t.pnl >= 0 ? zero - h : zero;
-        const color = t.pnl >= 0 ? "#00d4aa" : "#ff4757";
-        const isLatest = i === n - 1;
-        const sign = t.pnl >= 0 ? "+" : "";
-        const tip = sign + Number(t.pnl).toFixed(2) + " · " + (t.side || "—");
-        html += '<rect x="'+x.toFixed(1)+'" y="'+y.toFixed(1)+'" width="'+barW.toFixed(1)+'" height="'+h.toFixed(1)+'" rx="2" fill="'+color+'" opacity="'+(isLatest?0.95:0.7)+'">'
-          + '<title>'+escapeAttr(tip)+'</title></rect>';
-      });
-      svg.innerHTML = html;
+      // Next window countdown
+      if(win && win.seconds_remaining != null){
+        nextWindowSeconds = Math.max(0, Math.floor(win.seconds_remaining));
+      }
     }catch(e){}
   }
 
-  loadStats(); loadPnLBars();
+  loadStats(); loadActivity();
   setInterval(loadStats, 15000);
-  setInterval(loadPnLBars, 15000);
+  setInterval(loadActivity, 15000);
+  setInterval(tickCountdown, 1000);
 })();
 </script>
 </body>
