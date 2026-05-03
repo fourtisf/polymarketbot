@@ -3,8 +3,12 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>Polymarket 5m BTC Bot</title>
+<title>agicapital · Polymarket 5m BTC</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64' fill='none'%3E%3Crect width='64' height='64' rx='10' fill='%231c1e26'/%3E%3Cg stroke='%23e6e7ea' stroke-width='3' fill='none'%3E%3Ccircle cx='32' cy='32' r='18'/%3E%3Cpath d='M32 20 L43 41 L21 41 Z' stroke-linejoin='miter'/%3E%3Cline x1='25' y1='35' x2='39' y2='35' stroke-linecap='square'/%3E%3C/g%3E%3C/svg%3E">
 <link rel="preconnect" href="https://cdn.jsdelivr.net">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js" defer></script>
 <style>
 :root{
@@ -27,8 +31,17 @@ header{
   background:rgba(10,10,15,.72);border-bottom:1px solid var(--border);
   padding:10px 14px;display:flex;gap:14px;align-items:center;justify-content:space-between;flex-wrap:wrap;
 }
-.brand{display:flex;gap:10px;align-items:center;font-weight:600;font-size:13px;letter-spacing:.3px}
-.dot{width:9px;height:9px;border-radius:50%;background:var(--green);box-shadow:0 0 10px var(--green);animation:pulse 2s infinite}
+.brand{display:flex;gap:14px;align-items:center;min-width:0}
+.brand-logo{display:flex;align-items:center;gap:10px;color:var(--text);text-decoration:none;flex-shrink:0}
+.brand-logo:hover{opacity:.9}
+.logo-mark{width:30px;height:30px;display:block;color:var(--text);flex-shrink:0}
+.wordmark{font-family:"Inter","Helvetica Neue",Helvetica,Arial,sans-serif;font-size:20px;letter-spacing:-.02em;line-height:1;display:inline-flex}
+.wm-agi{font-weight:700;color:var(--text)}
+.wm-cap{font-weight:400;color:var(--muted)}
+.brand-divider{width:1px;height:22px;background:var(--border);flex-shrink:0}
+.bot-id{display:flex;gap:8px;align-items:center;font-weight:600;font-size:12px;letter-spacing:.3px;color:var(--muted);min-width:0}
+.bot-id .bot-label{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dot{width:9px;height:9px;border-radius:50%;background:var(--green);box-shadow:0 0 10px var(--green);animation:pulse 2s infinite;flex-shrink:0}
 .dot.off{background:var(--red);box-shadow:0 0 10px var(--red)}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.45}}
 .hdr-stats{display:flex;gap:18px;align-items:center;flex-wrap:wrap}
@@ -102,9 +115,20 @@ tbody tr.skip{color:var(--dim)}
 
 <header>
   <div class="brand">
-    <span id="statusDot" class="dot off"></span>
-    <span>POLYMARKET 5M · BTC</span>
-    <span id="modeBadge" class="signal" style="margin-left:4px">—</span>
+    <a class="brand-logo" href="/" aria-label="agicapital">
+      <svg class="logo-mark" viewBox="0 0 64 64" fill="none" aria-hidden="true">
+        <circle cx="32" cy="32" r="26" stroke="currentColor" stroke-width="3"/>
+        <path d="M32 14 L48 44 L16 44 Z" stroke="currentColor" stroke-width="3" stroke-linejoin="miter" fill="none"/>
+        <line x1="22" y1="36" x2="42" y2="36" stroke="currentColor" stroke-width="3" stroke-linecap="square"/>
+      </svg>
+      <span class="wordmark"><span class="wm-agi">agi</span><span class="wm-cap">capital</span></span>
+    </a>
+    <span class="brand-divider" aria-hidden="true"></span>
+    <div class="bot-id">
+      <span id="statusDot" class="dot off"></span>
+      <span class="bot-label">POLYMARKET 5M · BTC</span>
+      <span id="modeBadge" class="signal">—</span>
+    </div>
   </div>
   <div class="hdr-stats">
     <div class="hdr-item"><span class="lbl">BTC</span><span id="hBtc" class="val mono">—</span></div>
