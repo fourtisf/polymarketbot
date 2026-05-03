@@ -282,8 +282,11 @@ tbody tr.skip{color:var(--dim)}
     charts.eq = new Chart(ctxE,{
       type:"line",
       data:{labels:[],datasets:[{data:[],borderColor:GREEN,backgroundColor:grad,
-        borderWidth:2.5,pointRadius:0,pointHoverRadius:5,pointHoverBackgroundColor:GREEN,
-        tension:.3,fill:true}]},
+        borderWidth:2.5,
+        pointRadius:(ctx)=> ctx.dataset.data.length<=2?4:0,
+        pointBackgroundColor:GREEN,
+        pointHoverRadius:6,pointHoverBackgroundColor:GREEN,pointHoverBorderColor:"#fff",pointHoverBorderWidth:2,
+        tension:.3,fill:true,spanGaps:true}]},
       options:{responsive:true,maintainAspectRatio:false,animation:false,
         interaction:{mode:"index",intersect:false},
         plugins:{legend:{display:false},tooltip:{
@@ -292,7 +295,8 @@ tbody tr.skip{color:var(--dim)}
           callbacks:{ label:(i)=> "Balance  $"+fmt(i.parsed.y,2) }
         }},
         scales:{x:{grid:{display:false},ticks:{maxTicksLimit:6,color:"#5a5e6b"}},
-                y:{grid:{color:"rgba(255,255,255,.04)"},ticks:{color:"#5a5e6b",callback:(v)=>"$"+v}}}
+                y:{grid:{color:"rgba(255,255,255,.04)"},ticks:{color:"#5a5e6b",callback:(v)=>"$"+v},
+                   grace:"5%"}}
       }
     });
 
