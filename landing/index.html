@@ -209,10 +209,25 @@ section.block{padding:80px 0;border-top:1px solid var(--border)}
 .launch .ca .label{color:var(--muted);font-weight:600;letter-spacing:.5px;
   font-family:"Inter",sans-serif;text-transform:uppercase;font-size:9.5px}
 .launch .ca-soon{color:var(--green);font-weight:700;letter-spacing:.4px;text-transform:uppercase;font-size:10px}
+.launch .ca-addr{color:var(--green);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+  font-size:11.5px;font-weight:600;letter-spacing:.2px;transition:opacity .15s;cursor:pointer}
+.launch .ca-addr:hover{opacity:.8}
+.launch .ca-full{display:inline}
+.launch .ca-short{display:none}
+.launch .ca-copy{display:inline-flex;align-items:center;justify-content:center;
+  width:22px;height:22px;padding:0;border-radius:5px;border:none;
+  background:rgba(0,212,170,.14);color:var(--green);cursor:pointer;
+  transition:background .15s,transform .12s;font-family:inherit;flex-shrink:0}
+.launch .ca-copy:hover{background:rgba(0,212,170,.28)}
+.launch .ca-copy:active{transform:scale(.92)}
+.launch .ca-copy svg{width:11px;height:11px}
+.launch .ca-copy.copied{background:var(--green);color:#06170f}
 .launch .sep{width:3px;height:3px;border-radius:50%;background:rgba(255,255,255,.2);flex-shrink:0}
 @media (max-width:680px){
   .launch{padding:10px 14px;font-size:12px;gap:10px;text-align:center}
   .launch .hide-sm{display:none}
+  .launch .ca-full{display:none}
+  .launch .ca-short{display:inline}
 }
 
 /* Footer */
@@ -236,7 +251,13 @@ footer{padding:32px 0;border-top:1px solid var(--border);color:var(--muted);font
   <span class="sep" aria-hidden="true"></span>
   <span class="ca">
     <span class="label">CA</span>
-    <span class="ca-soon">Coming soon</span>
+    <a class="ca-addr" id="caLink" href="https://pump.fun/coin/97Ejf1sGq59uJcFDyPEH8y3tEZV4iADxKaiL28xpump" target="_blank" rel="noopener" title="View on pump.fun">
+      <span class="ca-full">97Ejf1sGq59uJcFDyPEH8y3tEZV4iADxKaiL28xpump</span>
+      <span class="ca-short">97Ej…pump</span>
+    </a>
+    <button class="ca-copy" id="caCopy" type="button" aria-label="Copy contract address" title="Copy">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+    </button>
   </span>
 </div>
 
@@ -711,6 +732,32 @@ footer{padding:32px 0;border-top:1px solid var(--border);color:var(--muted);font
   setInterval(loadActivity, 5000);
   setInterval(loadTradesTable, 10000);
   setInterval(tickCountdown, 1000);
+
+  const CA = "97Ejf1sGq59uJcFDyPEH8y3tEZV4iADxKaiL28xpump";
+  const copyBtn = document.getElementById("caCopy");
+  if(copyBtn){
+    const original = copyBtn.innerHTML;
+    const checkIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>';
+    copyBtn.addEventListener("click", async (e) => {
+      e.preventDefault();
+      try{
+        if(navigator.clipboard && navigator.clipboard.writeText){
+          await navigator.clipboard.writeText(CA);
+        } else {
+          const ta = document.createElement("textarea");
+          ta.value = CA; ta.style.position = "fixed"; ta.style.opacity = "0";
+          document.body.appendChild(ta); ta.select();
+          document.execCommand("copy"); document.body.removeChild(ta);
+        }
+        copyBtn.classList.add("copied");
+        copyBtn.innerHTML = checkIcon;
+        setTimeout(() => {
+          copyBtn.classList.remove("copied");
+          copyBtn.innerHTML = original;
+        }, 1500);
+      }catch(err){}
+    });
+  }
 })();
 </script>
 </body>
