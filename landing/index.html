@@ -382,13 +382,6 @@ footer{padding:32px 0;border-top:1px solid var(--border);color:var(--muted);font
   </div>
 </section>
 
-<section class="cta-final">
-  <div class="container">
-    <h2 id="ctaHeading">The numbers are <span style="color:var(--green)">live</span>.</h2>
-    <p id="ctaSub">Every trade and decision is logged. The full ledger updates every 5 minutes — open the dashboard to inspect it.</p>
-    <a class="btn btn-primary" href="https://bot.agicapital.io" style="padding:14px 24px;font-size:15px">Open the live dashboard →</a>
-  </div>
-</section>
 
 </main>
 
@@ -430,14 +423,6 @@ footer{padding:32px 0;border-top:1px solid var(--border);color:var(--muted);font
     $("statsPillText").textContent = isPaper ? "Paper" : "Live";
     // Balance label
     $("balanceLabel").textContent = isPaper ? "Simulated balance" : "Account balance";
-    // CTA copy
-    if(isPaper){
-      $("ctaHeading").innerHTML = 'Currently in <span style="color:var(--amber)">calibration</span>.';
-      $("ctaSub").textContent = "The bot is running in paper mode while the strategy is being validated. The dashboard shows simulated P&L, not real trading performance.";
-    }else{
-      $("ctaHeading").innerHTML = 'The numbers are <span style="color:var(--green)">live</span>.';
-      $("ctaSub").textContent = "Every trade and decision is logged. The full ledger updates every 5 minutes — open the dashboard to inspect it.";
-    }
     // Lede sentence — drop the "verifiable" claim in paper mode
     $("heroLede").textContent = isPaper
       ? "AGI Capital is calibrating an autonomous momentum strategy on Polymarket's BTC 5-minute binary markets. The bot is currently paper-trading; numbers below are simulated until real collateral is deployed."

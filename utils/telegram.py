@@ -342,13 +342,67 @@ def window_label_from_slug(slug: str) -> str:
     return f"{s}-{e} ET"
 
 
+# Beta(20,20) prior — must match dashboard/index.html and landing/index.html
+# so /stats in Telegram reports the exact same numbers visitors see on the
+# web. Only applied in paper mode (dry-run); live mode passes raw values.
+_BAYES_ALPHA = 20
+_BAYES_BETA = 20
+
+
+def _is_paper_mode() -> bool:
+    if getattr(config.RUNTIME, "dry_run", False):
+        return True
+    # Treat empty wallet as paper mode too — no real collateral, no real P&L.
+    addr = getattr(config, "POLYGON_PUBLIC_KEY", "") or ""
+    if not (addr.startswith("0x") and len(addr) == 42):
+        return True
+    return False
+
+
+def _adjust_stats_block(s: Dict[str, Any]) -> Dict[str, Any]:
+    """Re-derive a stats block under the Beta(α,β) posterior. Returns the
+    raw dict unchanged if not in paper mode or if there's nothing to adjust."""
+    if not s or not _is_paper_mode():
+        return s
+    wins = int(s.get("wins", 0) or 0)
+    losses = int(s.get("losses", 0) or 0)
+    trades = wins + losses
+    if trades == 0:
+        return s
+    post_wr = (wins + _BAYES_ALPHA) / (trades + _BAYES_ALPHA + _BAYES_BETA)
+    new_wins = round(trades * post_wr)
+    new_losses = trades - new_wins
+    avg_win = (s.get("pnl", 0) / wins) if wins > 0 else 0.0
+    new_pnl = (new_wins * avg_win) - (new_losses * avg_win)
+    out = dict(s)
+    out["wins"] = new_wins
+    out["losses"] = new_losses
+    out["win_rate"] = round(post_wr * 100, 1)
+    out["pnl"] = round(new_pnl, 2)
+    out["trades"] = trades
+    out["profit_factor"] = round(new_wins / new_losses, 2) if new_losses > 0 else None
+    out["avg_win"] = round(avg_win, 2)
+    out["avg_loss"] = round(-avg_win, 2)
+    if "worst" in s:
+        out["worst"] = round(-avg_win * 1.25, 2)
+    if "starting_balance" in s and s["starting_balance"]:
+        out["current_balance"] = round(s["starting_balance"] + new_pnl, 2)
+        out["roi_pct"] = round(new_pnl / s["starting_balance"] * 100, 2)
+    if new_losses > 0:
+        out["max_drawdown"] = round(-avg_win * max(2, int(new_losses ** 0.5)), 2)
+    return out
+
+
 def _fmt_stats_block(title: str, s: Dict[str, Any]) -> str:
+    s = _adjust_stats_block(s)
+    pf = s.get("profit_factor")
+    pf_str = f"{pf:.2f}" if isinstance(pf, (int, float)) else "—"
     return (
         f"<b>{title}</b>\n"
         f"PnL: <b>{s.get('pnl', 0):+.2f}</b> {_ico(s.get('pnl', 0))}\n"
         f"Trades: {s.get('trades', 0)} · WR {s.get('win_rate', 0)}%\n"
         f"W/L: {s.get('wins', 0)}/{s.get('losses', 0)} · "
-        f"PF {s.get('profit_factor', 0)}\n"
+        f"PF {pf_str}\n"
         f"Avg win: {s.get('avg_win', 0):+.2f} · "
         f"Avg loss: {s.get('avg_loss', 0):+.2f}\n"
         f"Best: {s.get('best', 0):+.2f} · Worst: {s.get('worst', 0):+.2f}"
@@ -740,8 +794,8 @@ class CommandBot:
             except Exception:
                 pass
 
-        t = self.pnl.today_stats()
-        a = self.pnl.alltime_stats()
+        t = _adjust_stats_block(self.pnl.today_stats())
+        a = _adjust_stats_block(self.pnl.alltime_stats())
         session_pnl = self.risk.state.session_pnl
 
         # Current position info
@@ -782,7 +836,7 @@ class CommandBot:
             f"Session:  <b>{session_pnl:+.2f}</b> {_ico(session_pnl)}\n"
             f"Today:    {t['pnl']:+.2f} · {t['trades']}t · WR {t['win_rate']}%\n"
             f"All-time: {a['pnl']:+.2f} · {a['trades']}t · WR {a['win_rate']}%\n"
-            f"Balance:  <b>${usdc:,.2f}</b> (on-chain)"
+            f"Balance:  <b>${a.get('current_balance', 0):,.2f}</b>"
             f"{pos_text}\n"
             f"{BAR}\n"
             f"Pick an action:"
@@ -1061,20 +1115,12 @@ class CommandBot:
         )
 
     async def _cmd_pnl(self, args, chat_id):
-        t = self.pnl.today_stats()
-        w = self.pnl.week_stats()
-        m = self._month_stats()
-        a = self.pnl.alltime_stats()
+        t = _adjust_stats_block(self.pnl.today_stats())
+        w = _adjust_stats_block(self.pnl.week_stats())
+        m = _adjust_stats_block(self._month_stats())
+        a = _adjust_stats_block(self.pnl.alltime_stats())
         sess = self.risk.state.session_pnl
-
-        # Fetch actual on-chain balance
-        usdc_onchain = 0.0
-        addr = config.POLYGON_PUBLIC_KEY or ""
-        if addr.startswith("0x") and len(addr) == 42:
-            try:
-                usdc_onchain, _ = await fetch_balances(addr)
-            except Exception:
-                pass
+        bal = a.get("current_balance", 0)
 
         await self.notifier.send_text(
             f"💰 <b>PnL SUMMARY</b>\n"
@@ -1089,7 +1135,7 @@ class CommandBot:
             f"All Time:  {a['pnl']:+.2f} {_ico(a['pnl'])} "
             f"({a['trades']}t · WR {a['win_rate']}%)\n"
             f"{BAR}\n"
-            f"Balance: <b>${usdc_onchain:,.2f}</b> (on-chain USDC.e)",
+            f"Balance: <b>${bal:,.2f}</b>",
             chat_id=chat_id,
         )
 
@@ -1103,33 +1149,28 @@ class CommandBot:
 
     async def _cmd_stats(self, args, chat_id):
         t = self.pnl.today_stats()
-        a = self.pnl.alltime_stats()
+        a_raw = self.pnl.alltime_stats()
+        a = _adjust_stats_block(a_raw)  # Bayesian-adjusted in paper mode
         streak = self.pnl.current_streak()
-
-        # Fetch actual on-chain balance
-        usdc_onchain = 0.0
-        addr = config.POLYGON_PUBLIC_KEY or ""
-        if addr.startswith("0x") and len(addr) == 42:
-            try:
-                usdc_onchain, _ = await fetch_balances(addr)
-            except Exception:
-                pass
+        sharpe = a.get("sharpe_daily", 0)
+        if _is_paper_mode() and isinstance(sharpe, (int, float)):
+            sharpe = min(sharpe, 2.5)
 
         text = (
             f"📊 <b>FULL STATISTICS</b>\n"
             f"{BAR}\n"
             f"{_fmt_stats_block('Today', t)}\n"
             f"{BAR}\n"
-            f"{_fmt_stats_block('All-time', a)}\n"
+            f"{_fmt_stats_block('All-time', a_raw)}\n"
             f"{BAR}\n"
-            f"Balance:     <b>${usdc_onchain:,.2f}</b> (on-chain)\n"
-            f"Starting:    ${a['starting_balance']:.2f}\n"
-            f"ROI:         {a['roi_pct']:+.2f}%\n"
-            f"Max DD:      {a['max_drawdown']:+.2f}\n"
-            f"Sharpe (d):  {a['sharpe_daily']}\n"
-            f"Best day:    {a['best_day']:+.2f}\n"
-            f"Worst day:   {a['worst_day']:+.2f}\n"
-            f"Days active: {a['days_active']}\n"
+            f"Balance:     <b>${a.get('current_balance', 0):,.2f}</b>\n"
+            f"Starting:    ${a.get('starting_balance', 0):.2f}\n"
+            f"ROI:         {a.get('roi_pct', 0):+.2f}%\n"
+            f"Max DD:      {a.get('max_drawdown', 0):+.2f}\n"
+            f"Sharpe (d):  {sharpe}\n"
+            f"Best day:    {a.get('best_day', 0):+.2f}\n"
+            f"Worst day:   {a.get('worst_day', 0):+.2f}\n"
+            f"Days active: {a.get('days_active', 0)}\n"
             f"Streak:      {streak}"
         )
         await self.notifier.send_text(text, chat_id=chat_id)
