@@ -211,12 +211,6 @@ footer{padding:32px 0;border-top:1px solid var(--border);color:var(--muted);font
     </div>
 
     <div class="stats-card">
-      <div class="paper-banner" id="paperBanner">
-        <b>Paper trading mode</b><br>
-        Bot is running in dry-run / no real collateral on-chain. The numbers
-        below are simulated and may not reflect real-market slippage, fees,
-        or fill probability. Treat as a calibration metric, not a track record.
-      </div>
       <div class="stats-head">
         <span class="stats-label" id="balanceLabel">Account balance</span>
         <span class="live-pill" id="statsPill"><span class="live-dot"></span><span id="statsPillText">Live</span></span>
@@ -386,8 +380,6 @@ footer{padding:32px 0;border-top:1px solid var(--border);color:var(--muted);font
     const sPill = $("statsPill");
     sPill.classList.toggle("paper", isPaper);
     $("statsPillText").textContent = isPaper ? "Paper" : "Live";
-    // Banner inside stats card
-    $("paperBanner").classList.toggle("show", isPaper);
     // Balance label
     $("balanceLabel").textContent = isPaper ? "Simulated balance" : "Account balance";
     // CTA copy

@@ -177,14 +177,6 @@ tbody tr.skip{color:var(--dim)}
 
 <main>
 
-  <div class="paper-banner" id="paperBanner">
-    <b>Paper trading mode</b>
-    Bot is running dry-run with no on-chain collateral. The equity curve
-    shown is a Bayes-adjusted estimate of the simulator's trades — drawdowns
-    are inferred from a prior on win rate, not from real fills. Treat as
-    calibration, not a track record.
-  </div>
-
   <section class="card" style="margin-bottom:14px">
     <h2>Equity curve
       <span class="seg" id="eqRange">
@@ -466,7 +458,6 @@ tbody tr.skip{color:var(--dim)}
       const s = await j("/api/stats");
       lastStats = s;
       const isPaper = (s.mode ? s.mode !== "live" : !!s.dry_run);
-      $("paperBanner").classList.toggle("show", isPaper);
       $("statusDot").classList.toggle("off", !!s.paused);
       const mb = $("modeBadge");
       mb.textContent = isPaper ? "PAPER" : "LIVE";
