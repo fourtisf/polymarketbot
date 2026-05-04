@@ -79,6 +79,24 @@ main{max-width:1240px;margin:0 auto;padding:24px 20px 80px}
 /* ─── Charts ─────────────────────────────────────────── */
 .chart-wrap{position:relative;height:280px}
 .chart-wrap.sm{height:200px}
+.chart-legend{display:flex;gap:14px;flex-wrap:wrap;align-items:center;margin:-4px 0 10px}
+.legend-pill{display:inline-flex;gap:8px;align-items:center;padding:6px 12px;border-radius:8px;
+  background:rgba(255,255,255,.025);border:1px solid var(--border);
+  font-size:11px;font-weight:600;color:var(--text);letter-spacing:.2px}
+.legend-pill .swatch{width:18px;height:3px;border-radius:2px;flex-shrink:0}
+.legend-pill .swatch.solid{background:var(--green)}
+.legend-pill .swatch.dashed{background:repeating-linear-gradient(90deg,var(--amber) 0 5px,transparent 5px 9px)}
+.legend-pill .label{color:var(--muted);font-weight:500;margin-left:2px}
+.legend-info{font-size:11px;color:var(--muted);margin-left:auto;line-height:1.4;max-width:340px;text-align:right}
+@media (max-width:640px){.legend-info{margin-left:0;text-align:left;max-width:none}}
+
+/* ─── Paper banner ───────────────────────────────────── */
+.paper-banner{display:none;background:var(--amber-dim);border:1px solid var(--amber-bd);
+  color:var(--amber);padding:12px 16px;border-radius:12px;margin-bottom:14px;
+  font-size:12.5px;line-height:1.55}
+.paper-banner.show{display:block}
+.paper-banner b{text-transform:uppercase;letter-spacing:.6px;font-size:11px;font-weight:700;
+  display:block;margin-bottom:2px}
 
 /* ─── Segmented control ─────────────────────────────── */
 .seg{display:inline-flex;gap:2px;background:rgba(255,255,255,.04);padding:3px;border-radius:8px;border:1px solid var(--border)}
@@ -159,6 +177,14 @@ tbody tr.skip{color:var(--dim)}
 
 <main>
 
+  <div class="paper-banner" id="paperBanner">
+    <b>Paper trading mode</b>
+    Bot is running dry-run with no on-chain collateral. Charts and stats below
+    are simulated. The amber dashed line on the equity chart is the
+    <i>posterior estimate</i> — what the curve would look like under a
+    Beta(10,10) prior on win rate. Treat as calibration, not a track record.
+  </div>
+
   <section class="card" style="margin-bottom:14px">
     <h2>Equity curve
       <span class="seg" id="eqRange">
@@ -168,6 +194,11 @@ tbody tr.skip{color:var(--dim)}
         <button data-r="all">ALL</button>
       </span>
     </h2>
+    <div class="chart-legend" id="eqLegend">
+      <span class="legend-pill"><span class="swatch solid"></span>Simulated equity <span class="label">raw</span></span>
+      <span class="legend-pill" id="eqLegendAdj" style="display:none"><span class="swatch dashed"></span>Posterior estimate <span class="label">Bayes-adjusted</span></span>
+      <span class="legend-info" id="eqLegendInfo"></span>
+    </div>
     <div class="chart-wrap"><canvas id="eqChart"></canvas></div>
   </section>
 
@@ -279,20 +310,28 @@ tbody tr.skip{color:var(--dim)}
     const grad = ctxE.createLinearGradient(0,0,0,280);
     grad.addColorStop(0,"rgba(0,212,170,.32)");
     grad.addColorStop(1,"rgba(0,212,170,0)");
+    const AMBER = "#ffaa28";
     charts.eq = new Chart(ctxE,{
       type:"line",
-      data:{labels:[],datasets:[{data:[],borderColor:GREEN,backgroundColor:grad,
-        borderWidth:2.5,
-        pointRadius:(ctx)=> ctx.dataset.data.length<=2?4:0,
-        pointBackgroundColor:GREEN,
-        pointHoverRadius:6,pointHoverBackgroundColor:GREEN,pointHoverBorderColor:"#fff",pointHoverBorderWidth:2,
-        tension:.3,fill:true,spanGaps:true}]},
+      data:{labels:[],datasets:[
+        {label:"Raw simulated",data:[],borderColor:GREEN,backgroundColor:grad,
+          borderWidth:2.5,
+          pointRadius:(ctx)=> ctx.dataset.data.length<=2?4:0,
+          pointBackgroundColor:GREEN,
+          pointHoverRadius:6,pointHoverBackgroundColor:GREEN,pointHoverBorderColor:"#fff",pointHoverBorderWidth:2,
+          tension:.3,fill:true,spanGaps:true,order:2},
+        {label:"Posterior estimate",data:[],borderColor:AMBER,backgroundColor:"transparent",
+          borderWidth:1.8,borderDash:[5,4],
+          pointRadius:0,pointHoverRadius:5,pointHoverBackgroundColor:AMBER,
+          pointHoverBorderColor:"#fff",pointHoverBorderWidth:2,
+          tension:.18,fill:false,spanGaps:true,order:1,hidden:true}
+      ]},
       options:{responsive:true,maintainAspectRatio:false,animation:false,
         interaction:{mode:"index",intersect:false},
         plugins:{legend:{display:false},tooltip:{
           backgroundColor:"#161620",borderColor:"rgba(255,255,255,.12)",borderWidth:1,
-          padding:10,cornerRadius:8,titleFont:{size:11,weight:600},bodyFont:{size:13,weight:700},
-          callbacks:{ label:(i)=> "Balance  $"+fmt(i.parsed.y,2) }
+          padding:10,cornerRadius:8,titleFont:{size:11,weight:600},bodyFont:{size:12.5,weight:600},
+          callbacks:{ label:(i)=> i.dataset.label + "  $"+fmt(i.parsed.y,2) }
         }},
         scales:{x:{grid:{display:false},ticks:{maxTicksLimit:6,color:"#5a5e6b"}},
                 y:{grid:{color:"rgba(255,255,255,.04)"},ticks:{color:"#5a5e6b",callback:(v)=>"$"+v},
@@ -327,11 +366,79 @@ tbody tr.skip{color:var(--dim)}
     const win = {"1d":86400,"1w":7*86400,"1m":30*86400}[range] || 30*86400;
     return pts.filter(p => (p.ts||0) >= now - win);
   }
+
+  // Deterministic 0..1 from an integer (mulberry32-ish, stable across reloads
+  // so the posterior curve doesn't dance every render).
+  function seedRand(n){
+    let t = (n|0) + 0x6D2B79F5;
+    t = Math.imul(t ^ (t>>>15), t | 1);
+    t ^= t + Math.imul(t ^ (t>>>7), t | 61);
+    return ((t ^ (t>>>14)) >>> 0) / 4294967296;
+  }
+
+  // Posterior predictive curve. Treat each step's PnL change as a "trade",
+  // then under Beta(α,β) prior + observed (wins, losses) the posterior win
+  // prob is (wins + α) / (trades + α + β). For each historical win, with
+  // probability (1 - posterior_wr / max(raw_wr, posterior_wr)) flip it into
+  // a synthetic loss of equivalent magnitude — this gives a curve whose
+  // win-rate matches the posterior, with realistic drawdowns from the prior.
+  function posteriorEquity(pts, wins, losses){
+    const ALPHA = 10, BETA = 10;
+    const trades = wins + losses;
+    if(pts.length < 2 || trades === 0) return pts.map(p => p.balance);
+    const postWr = (wins + ALPHA) / (trades + ALPHA + BETA);
+    const rawWr = wins / Math.max(trades, 1);
+    // Probability that a historical win should be reclassified to keep
+    // realised win-rate ≈ postWr. If raw is already ≤ posterior, no flip.
+    const flipProb = Math.max(0, 1 - (postWr / Math.max(rawWr, 1e-9)));
+    const out = [pts[0].balance];
+    let bal = pts[0].balance;
+    for(let i = 1; i < pts.length; i++){
+      const delta = pts[i].balance - pts[i-1].balance;
+      let adj = delta;
+      if(delta > 0){
+        // Win — maybe flip
+        if(seedRand(pts[i].ts || i) < flipProb){
+          // Realised loss in binary BTC market is roughly the entry cost
+          // (i.e. ~entry * shares). With no entry/share fields here, use
+          // the win amount as a stand-in proxy — same magnitude direction.
+          adj = -delta;
+        }
+      }
+      bal += adj;
+      out.push(bal);
+    }
+    return out;
+  }
+
+  let lastStats = null;
   function paintEquity(){
     const pts = filterEquity(equityAll,currentRange);
     const c = charts.eq; if(!c) return;
     c.data.labels = pts.map(p => new Date((p.ts||0)*1000).toLocaleString([], {month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"}));
     c.data.datasets[0].data = pts.map(p => p.balance);
+
+    // Show posterior dataset only when paper-mode AND raw curve looks
+    // suspiciously clean (zero recorded losses, or wr >= 95%). Otherwise
+    // hide the second line so live mode looks normal.
+    const a = (lastStats && lastStats.alltime) || {};
+    const wins = a.wins || 0, losses = a.losses || 0;
+    const rawWr = a.win_rate || 0;
+    const isPaper = (lastStats && lastStats.mode) ? lastStats.mode !== "live" : !!(lastStats && lastStats.dry_run);
+    const showPosterior = pts.length >= 2 && (isPaper || losses === 0 || (rawWr >= 95 && (wins+losses) < 500));
+
+    if(showPosterior){
+      c.data.datasets[1].data = posteriorEquity(pts, wins, losses);
+      c.data.datasets[1].hidden = false;
+      $("eqLegendAdj").style.display = "inline-flex";
+      const postWr = (wins + 10) / (wins + losses + 20) * 100;
+      $("eqLegendInfo").textContent = "Posterior assumes Beta(10,10) prior on win rate (≈" + postWr.toFixed(1) + "%). What live trading would more likely look like.";
+    }else{
+      c.data.datasets[1].data = [];
+      c.data.datasets[1].hidden = true;
+      $("eqLegendAdj").style.display = "none";
+      $("eqLegendInfo").textContent = "";
+    }
     c.update();
   }
 
@@ -343,10 +450,13 @@ tbody tr.skip{color:var(--dim)}
   async function loadStats(){
     try{
       const s = await j("/api/stats");
+      lastStats = s;
+      const isPaper = (s.mode ? s.mode !== "live" : !!s.dry_run);
+      $("paperBanner").classList.toggle("show", isPaper);
       $("statusDot").classList.toggle("off", !!s.paused);
       const mb = $("modeBadge");
-      mb.textContent = s.dry_run ? "DRY-RUN" : "LIVE";
-      mb.className = "signal" + (s.dry_run ? " warn" : "");
+      mb.textContent = isPaper ? "PAPER" : "LIVE";
+      mb.className = "signal" + (isPaper ? " warn" : "");
       $("hBal").textContent = "$"+fmt(s.alltime.current_balance,2);
       const td = s.today.pnl||0;
       const he = $("hToday");
@@ -355,6 +465,9 @@ tbody tr.skip{color:var(--dim)}
       fillCard("td",s.today);
       fillCard("wk",s.week);
       fillAllTime(s.alltime);
+      // Posterior visibility depends on stats — repaint chart whenever
+      // mode/win-rate flips.
+      if(charts.eq) paintEquity();
     }catch(e){}
   }
   function fillCard(p,x){
