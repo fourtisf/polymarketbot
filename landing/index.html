@@ -224,6 +224,7 @@ footer{padding:32px 0;border-top:1px solid var(--border);color:var(--muted);font
         <div class="stat-cell"><div class="lbl">Win rate</div><div class="val mono" id="winrate">—</div></div>
         <div class="stat-cell"><div class="lbl">Profit factor</div><div class="val mono" id="pf">—</div></div>
       </div>
+      <div class="stats-foot mono" id="statsFoot" style="margin-top:10px;font-size:11px;color:var(--muted);text-align:center;opacity:.85">—</div>
     </div>
   </div>
 </section>
@@ -359,13 +360,14 @@ footer{padding:32px 0;border-top:1px solid var(--border);color:var(--muted);font
 
   async function loadStats(){
     try{
-      const r = await fetch(API + "/api/stats");
+      const r = await fetch(API + "/api/stats", {cache: "no-store"});
       if(!r.ok) throw new Error(r.status);
       const s = await r.json();
-      const bal = s.alltime && s.alltime.current_balance;
-      const today = (s.today && s.today.pnl) || 0;
-      const tdTrades = s.today || {};
       const at = s.alltime || {};
+      const today = (s.today && s.today.pnl) || 0;
+      // Prefer real on-chain wallet balance over computed (start + pnl).
+      const onchain = at.onchain_balance;
+      const bal = onchain != null ? onchain : at.current_balance;
       $("balance").textContent = bal!=null ? "$"+fmt(bal,2) : "$—";
       const startBal = bal!=null && today!=null ? bal - today : null;
       const pct = (startBal && startBal !== 0) ? (today / startBal * 100) : null;
@@ -376,9 +378,25 @@ footer{padding:32px 0;border-top:1px solid var(--border);color:var(--muted);font
       dp.textContent = pct==null ? "—" : (pct>=0?"+":"") + fmt(pct,2) + "%";
       dp.className = (pct||0) >= 0 ? "pos" : "neg";
       const wins = at.wins||0, losses = at.losses||0;
-      $("trades").textContent = (wins + losses) || "—";
-      $("winrate").textContent = at.win_rate!=null ? at.win_rate + "%" : "—";
-      $("pf").textContent = at.profit_factor!=null ? at.profit_factor : "—";
+      const totalTrades = wins + losses;
+      $("trades").textContent = totalTrades || "—";
+      $("winrate").textContent = at.win_rate!=null && totalTrades > 0 ? at.win_rate + "%" : "—";
+      // profit_factor is null when there are zero losses — show ∞ instead of
+      // a fake fixed number so the math is honest.
+      const pfVal = at.profit_factor;
+      $("pf").textContent = pfVal == null
+        ? (wins > 0 && losses === 0 ? "∞" : "—")
+        : fmt(pfVal, 2);
+      // Transparency footer — surface skipped + phantom counts so visitors
+      // can see the full denominator, not just the filtered one.
+      const skipped = at.skipped_count;
+      const phantom = at.phantom_count;
+      const parts = [];
+      parts.push(totalTrades + " settled");
+      if (skipped != null) parts.push(skipped + " skipped");
+      if (phantom != null && phantom > 0) parts.push(phantom + " phantom");
+      if (onchain != null) parts.push("balance: on-chain");
+      $("statsFoot").textContent = parts.join(" · ");
     }catch(e){
       // Leave placeholders if API unreachable
     }
@@ -473,9 +491,9 @@ footer{padding:32px 0;border-top:1px solid var(--border);color:var(--muted);font
   }
 
   loadStats(); loadActivity(); loadTradesTable();
-  setInterval(loadStats, 15000);
-  setInterval(loadActivity, 15000);
-  setInterval(loadTradesTable, 15000);
+  setInterval(loadStats, 5000);
+  setInterval(loadActivity, 5000);
+  setInterval(loadTradesTable, 10000);
   setInterval(tickCountdown, 1000);
 })();
 </script>

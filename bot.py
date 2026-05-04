@@ -111,7 +111,7 @@ class TradingBot:
         self.notifier = Notifier()
         self.state = BotState()
 
-        self.dashboard = DashboardServer(self.pnl, self.risk, self.state)
+        self.dashboard = DashboardServer(self.pnl, self.risk, self.state, trade_log=self.trade_log)
         self.cmdbot = CommandBot(self.pnl, self.risk, self.executor, self.notifier, trading_bot=self)
 
         self._tasks: list = []
