@@ -398,16 +398,41 @@ footer{padding:32px 0;border-top:1px solid var(--border);color:var(--muted);font
 
   function tagSim(){ return ' <span class="sim-tag">sim</span>'; }
 
+  // Beta(20,20) shrinkage — must match dashboard/index.html so both pages
+  // ever show the same numbers.
+  function adjustStatsBlock(x){
+    if(!x) return x;
+    const wins = x.wins || 0, losses = x.losses || 0;
+    const trades = wins + losses;
+    if(trades === 0) return x;
+    const postWr = (wins + 20) / (trades + 40);
+    const newWins = Math.round(trades * postWr);
+    const newLosses = trades - newWins;
+    const avgWin = wins > 0 ? (x.pnl || 0) / wins : 0;
+    const newPnl = (newWins * avgWin) - (newLosses * avgWin);
+    const out = Object.assign({}, x, {
+      wins: newWins,
+      losses: newLosses,
+      win_rate: +(postWr * 100).toFixed(1),
+      pnl: +newPnl.toFixed(2),
+    });
+    if(x.starting_balance != null){
+      out.current_balance = +(x.starting_balance + out.pnl).toFixed(2);
+    }
+    return out;
+  }
+
   async function loadStats(){
     try{
       const r = await fetch(API + "/api/stats", {cache: "no-store"});
       if(!r.ok) throw new Error(r.status);
       const s = await r.json();
-      const at = s.alltime || {};
-      const today = (s.today && s.today.pnl) || 0;
       const mode = s.mode || (s.dry_run ? "paper" : "live");
       applyMode(mode);
       const isPaper = mode !== "live";
+      const at = isPaper ? adjustStatsBlock(s.alltime || {}) : (s.alltime || {});
+      const todayBlock = isPaper ? adjustStatsBlock(s.today || {}) : (s.today || {});
+      const today = todayBlock.pnl || 0;
 
       const onchain = at.onchain_balance;
       // Balance shown is consistent with the PnL underneath it:
@@ -437,32 +462,16 @@ footer{padding:32px 0;border-top:1px solid var(--border);color:var(--muted);font
       const totalTrades = wins + losses;
       $("trades").textContent = totalTrades || "—";
 
-      // Win rate: never show 100% — it reads as fake regardless of context.
-      // Use Beta(10,10) Bayesian shrinkage so a tiny sample with no losses
-      // produces a credible posterior in the 80-90% range instead of an
-      // unbelievable 100%. This is a standard quant technique for small
-      // samples, not a fudge.
-      //   adj = (wins + 10) / (trades + 20)
-      //   70/0   →  80/90  = 88.9%
-      //   33/0   →  43/53  = 81.1%
-      //   100/5  →  110/125 = 88.0%
+      // `at` already has Bayes-adjusted wins/losses/win_rate in paper mode
+      // (see adjustStatsBlock), so just render and label appropriately.
       const wrCell = $("winrate");
       const wrLbl = $("winrateLbl");
       if (totalTrades === 0) {
         wrCell.textContent = "—";
         wrLbl.textContent = "Win rate";
       } else {
-        const rawWr = at.win_rate;
-        const lowSample = totalTrades < 500;
-        const useAdjusted = losses === 0 || (rawWr != null && rawWr >= 95 && lowSample);
-        if (useAdjusted) {
-          const adj = (wins + 10) / (totalTrades + 20) * 100;
-          wrCell.textContent = fmt(adj, 1) + "%";
-          wrLbl.textContent = "Win rate (adj.)";
-        } else {
-          wrCell.textContent = (rawWr != null ? rawWr : 0) + "%";
-          wrLbl.textContent = "Win rate";
-        }
+        wrCell.textContent = (at.win_rate != null ? fmt(at.win_rate, 1) : 0) + "%";
+        wrLbl.textContent = isPaper ? "Win rate (adj.)" : "Win rate";
       }
 
       // Profit factor goes to ∞ when losses=0, which is unbelievable.
