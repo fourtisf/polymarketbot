@@ -58,6 +58,7 @@ nav a:hover{color:var(--text)}
 .sim-tag{display:inline-block;font-size:9.5px;font-weight:700;letter-spacing:.7px;color:var(--amber);
   background:var(--amber-dim);border:1px solid var(--amber-bd);border-radius:6px;
   padding:2px 6px;margin-left:8px;text-transform:uppercase;vertical-align:middle}
+.calibrating{font-size:13px;font-weight:600;color:var(--amber);letter-spacing:.3px;text-transform:none}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
 
 /* Hero */
@@ -444,27 +445,33 @@ footer{padding:32px 0;border-top:1px solid var(--border);color:var(--muted);font
       const totalTrades = wins + losses;
       $("trades").textContent = totalTrades || "—";
 
-      // Show win rate AND profit factor with their real values, but tag them
-      // when the sample is too small to be statistically meaningful, or when
-      // running in paper mode. Don't hide — visitors will think the bot has
-      // no stats. Just make the caveat visible inline.
+      // Win rate + profit factor: never display "100%" or "∞" — those
+      // numbers read as fake regardless of disclaimers. While in paper
+      // mode, OR until at least one loss has been recorded, OR with a
+      // tiny sample, show "Calibrating" so the cells communicate
+      // "stats not ready" instead of bragging.
       const wr = at.win_rate;
       const lowSample = totalTrades < 500;
       const suspicious = wr != null && wr >= 95 && lowSample;
+      const notReady = isPaper || losses === 0 || suspicious;
       const wrCell = $("winrate");
       if (wr == null || totalTrades === 0) {
         wrCell.textContent = "—";
+      } else if (notReady) {
+        wrCell.innerHTML = '<span class="calibrating">Calibrating</span>';
       } else {
-        wrCell.innerHTML = wr + "%" + (suspicious || isPaper ? tagSim() : "");
+        wrCell.textContent = wr + "%";
       }
 
       const pfVal = at.profit_factor;
       const pfCell = $("pf");
-      if (pfVal == null) {
-        // null means losses == 0 → ratio undefined. Show ∞ honestly.
-        pfCell.innerHTML = (wins > 0 ? "∞" : "—") + (isPaper && wins > 0 ? tagSim() : "");
+      if (pfVal == null || notReady) {
+        // null = losses == 0; either way we hide the bragging number.
+        pfCell.innerHTML = totalTrades > 0
+          ? '<span class="calibrating">Calibrating</span>'
+          : "—";
       } else {
-        pfCell.innerHTML = fmt(pfVal, 2) + (isPaper ? tagSim() : "");
+        pfCell.textContent = fmt(pfVal, 2);
       }
 
       // Footer — surface the full picture so the win-rate denominator is
