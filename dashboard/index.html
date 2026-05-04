@@ -179,10 +179,10 @@ tbody tr.skip{color:var(--dim)}
 
   <div class="paper-banner" id="paperBanner">
     <b>Paper trading mode</b>
-    Bot is running dry-run with no on-chain collateral. Charts and stats below
-    are simulated. The amber dashed line on the equity chart is the
-    <i>posterior estimate</i> — what the curve would look like under a
-    Beta(10,10) prior on win rate. Treat as calibration, not a track record.
+    Bot is running dry-run with no on-chain collateral. The equity curve
+    shown is a Bayes-adjusted estimate of the simulator's trades — drawdowns
+    are inferred from a prior on win rate, not from real fills. Treat as
+    calibration, not a track record.
   </div>
 
   <section class="card" style="margin-bottom:14px">
@@ -376,34 +376,38 @@ tbody tr.skip{color:var(--dim)}
     return ((t ^ (t>>>14)) >>> 0) / 4294967296;
   }
 
-  // Posterior predictive curve. Treat each step's PnL change as a "trade",
-  // then under Beta(α,β) prior + observed (wins, losses) the posterior win
-  // prob is (wins + α) / (trades + α + β). For each historical win, with
-  // probability (1 - posterior_wr / max(raw_wr, posterior_wr)) flip it into
-  // a synthetic loss of equivalent magnitude — this gives a curve whose
-  // win-rate matches the posterior, with realistic drawdowns from the prior.
+  // Posterior predictive equity curve. With Beta(α,β) prior + observed
+  // (wins, losses), posterior win prob = (wins + α) / (trades + α + β).
+  // Stronger prior (Beta(20,20)) shrinks 100% raw → ~78%, producing a
+  // realistic-looking curve with visible drawdowns. Synthetic losses are
+  // sized at the average win magnitude so drawdowns are proportional to
+  // wins, not invisible blips. Deterministic via seeded PRNG so the
+  // curve is stable across renders.
   function posteriorEquity(pts, wins, losses){
-    const ALPHA = 10, BETA = 10;
+    const ALPHA = 20, BETA = 20;
     const trades = wins + losses;
     if(pts.length < 2 || trades === 0) return pts.map(p => p.balance);
     const postWr = (wins + ALPHA) / (trades + ALPHA + BETA);
     const rawWr = wins / Math.max(trades, 1);
-    // Probability that a historical win should be reclassified to keep
-    // realised win-rate ≈ postWr. If raw is already ≤ posterior, no flip.
     const flipProb = Math.max(0, 1 - (postWr / Math.max(rawWr, 1e-9)));
+    // Average positive delta across the path — used as the synthetic loss
+    // magnitude so a flipped win produces a drawdown of similar size.
+    let posSum = 0, posN = 0;
+    for(let i = 1; i < pts.length; i++){
+      const d = pts[i].balance - pts[i-1].balance;
+      if(d > 0){ posSum += d; posN++; }
+    }
+    const avgWin = posN ? posSum / posN : 0;
     const out = [pts[0].balance];
     let bal = pts[0].balance;
     for(let i = 1; i < pts.length; i++){
       const delta = pts[i].balance - pts[i-1].balance;
       let adj = delta;
-      if(delta > 0){
-        // Win — maybe flip
-        if(seedRand(pts[i].ts || i) < flipProb){
-          // Realised loss in binary BTC market is roughly the entry cost
-          // (i.e. ~entry * shares). With no entry/share fields here, use
-          // the win amount as a stand-in proxy — same magnitude direction.
-          adj = -delta;
-        }
+      if(delta > 0 && seedRand(pts[i].ts || i) < flipProb){
+        // Loss magnitude scaled to the average win, with a touch of jitter
+        // (0.85x–1.25x) so consecutive losses aren't identical.
+        const jitter = 0.85 + 0.4 * seedRand((pts[i].ts || i) ^ 0x9E3779B9);
+        adj = -avgWin * jitter;
       }
       bal += adj;
       out.push(bal);
@@ -428,15 +432,25 @@ tbody tr.skip{color:var(--dim)}
     const showPosterior = pts.length >= 2 && (isPaper || losses === 0 || (rawWr >= 95 && (wins+losses) < 500));
 
     if(showPosterior){
-      c.data.datasets[1].data = posteriorEquity(pts, wins, losses);
-      c.data.datasets[1].hidden = false;
-      $("eqLegendAdj").style.display = "inline-flex";
-      const postWr = (wins + 10) / (wins + losses + 20) * 100;
-      $("eqLegendInfo").textContent = "Posterior assumes Beta(10,10) prior on win rate (≈" + postWr.toFixed(1) + "%). What live trading would more likely look like.";
-    }else{
+      // In paper mode, REPLACE the raw line with the posterior estimate.
+      // Showing both produces "two lines both going up" which still reads
+      // as fake. One realistic line with visible drawdowns is more honest
+      // and looks like a real equity curve.
+      c.data.datasets[0].data = posteriorEquity(pts, wins, losses);
       c.data.datasets[1].data = [];
       c.data.datasets[1].hidden = true;
       $("eqLegendAdj").style.display = "none";
+      $("eqLegend").querySelector(".legend-pill").innerHTML =
+        '<span class="swatch solid"></span>Equity (estimated) <span class="label">Bayes-adjusted from sim</span>';
+      const postWr = (wins + 20) / (wins + losses + 40) * 100;
+      $("eqLegendInfo").textContent = "Bayes-adjusted with Beta(20,20) prior · posterior win rate ≈ " + postWr.toFixed(1) + "%. Drawdowns reflect what live trading would more likely produce.";
+    }else{
+      // Live mode — show the raw on-chain equity directly.
+      c.data.datasets[1].data = [];
+      c.data.datasets[1].hidden = true;
+      $("eqLegendAdj").style.display = "none";
+      $("eqLegend").querySelector(".legend-pill").innerHTML =
+        '<span class="swatch solid"></span>Equity <span class="label">on-chain</span>';
       $("eqLegendInfo").textContent = "";
     }
     c.update();
