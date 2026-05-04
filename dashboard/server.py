@@ -16,8 +16,9 @@ All endpoints are public — no auth.
 import asyncio
 import json
 import logging
+import time
 from pathlib import Path
-from typing import Any, Dict, Set
+from typing import Any, Dict, Optional, Set
 
 from aiohttp import web
 
@@ -27,13 +28,17 @@ log = logging.getLogger("dashboard")
 
 HTML_PATH = Path(__file__).parent / "index.html"
 
+ONCHAIN_BALANCE_TTL = 20  # seconds — cap RPC calls from public stats endpoint
+
 
 class DashboardServer:
-    def __init__(self, pnl_tracker, risk_manager, bot_state):
+    def __init__(self, pnl_tracker, risk_manager, bot_state, trade_log=None):
         self.pnl = pnl_tracker
         self.risk = risk_manager
         self.state = bot_state  # BotState — provides current window snapshot
+        self.trade_log = trade_log
         self._sse_clients: Set[asyncio.Queue] = set()
+        self._onchain_cache: Dict[str, Any] = {"ts": 0.0, "usdc": None, "pol": None}
         self.app = web.Application()
         self._setup_routes()
         self._runner: web.AppRunner = None
@@ -65,7 +70,7 @@ class DashboardServer:
     async def handle_stats(self, request: web.Request) -> web.Response:
         trades = self.pnl.all_trades()
         today_key = __import__("datetime").datetime.utcnow().strftime("%Y-%m-%d")
-        week_cutoff = __import__("time").time() - 7 * 86400
+        week_cutoff = time.time() - 7 * 86400
 
         def avg_conf(subset):
             vals = [t.get("confidence", 0) for t in subset if t.get("confidence")]
@@ -78,6 +83,26 @@ class DashboardServer:
         alltime = self.pnl.alltime_stats()
         alltime["avg_confidence"] = avg_conf(trades)
 
+        # On-chain balance — source of truth for the displayed balance.
+        # Falls back to STARTING_BALANCE+pnl if the RPC fetch fails.
+        onchain = await self._get_onchain_balance()
+        onchain_usdc = onchain.get("usdc")
+        if onchain_usdc is not None:
+            alltime["onchain_balance"] = round(onchain_usdc, 2)
+            alltime["onchain_balance_ts"] = onchain.get("ts")
+
+        # Transparency counts: skipped windows + phantom (unfilled CLOB) trades
+        # are NOT included in win rate, so surface them so visitors can judge.
+        counts = self._trade_log_counts()
+        alltime["skipped_count"] = counts["skipped"]
+        alltime["phantom_count"] = counts["phantom"]
+
+        # Mode: "live" only when bot is not in dry-run AND wallet has real
+        # collateral. Otherwise "paper" so the UI can disclose honestly.
+        dry = bool(config.RUNTIME.dry_run)
+        has_real_money = onchain_usdc is not None and onchain_usdc >= 1.0
+        mode = "live" if (not dry and has_real_money) else "paper"
+
         return web.json_response({
             "today": today,
             "week": week,
@@ -85,8 +110,40 @@ class DashboardServer:
             "streak": self.pnl.current_streak(),
             "risk": self.risk.snapshot(),
             "paused": config.RUNTIME.paused,
-            "dry_run": config.RUNTIME.dry_run,
+            "dry_run": dry,
+            "mode": mode,
         })
+
+    async def _get_onchain_balance(self) -> Dict[str, Any]:
+        addr = getattr(config, "POLYGON_PUBLIC_KEY", "") or ""
+        if not addr:
+            return {}
+        now = time.time()
+        if now - self._onchain_cache["ts"] < ONCHAIN_BALANCE_TTL and self._onchain_cache["usdc"] is not None:
+            return self._onchain_cache
+        try:
+            from utils.telegram import fetch_all_usdc
+            usdc_e, _usdc_nat, pol = await fetch_all_usdc(addr)
+            self._onchain_cache = {"ts": now, "usdc": usdc_e, "pol": pol}
+        except Exception as exc:
+            log.warning("on-chain balance fetch failed: %s", exc)
+            # Keep stale cache if we have one; otherwise leave None.
+            self._onchain_cache["ts"] = now
+        return self._onchain_cache
+
+    def _trade_log_counts(self) -> Dict[str, int]:
+        out = {"skipped": 0, "phantom": 0}
+        if not self.trade_log:
+            return out
+        try:
+            for rec in self.trade_log.all():
+                if rec.get("phantom") or rec.get("phase") == "phantom_detected":
+                    out["phantom"] += 1
+                elif rec.get("action") == "SKIP" or rec.get("side") == "SKIP":
+                    out["skipped"] += 1
+        except Exception as exc:
+            log.debug("trade_log count failed: %s", exc)
+        return out
 
     async def handle_trades(self, request: web.Request) -> web.Response:
         try:

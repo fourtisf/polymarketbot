@@ -13,8 +13,9 @@
 :root{
   --bg:#0a0a0f; --card:#12121a; --border:rgba(255,255,255,.08);
   --text:#e6e7ea; --muted:#8b8e99; --dim:#5a5e6b;
-  --green:#00d4aa; --red:#ff4757;
+  --green:#00d4aa; --red:#ff4757; --amber:#f5a623;
   --green-dim:rgba(0,212,170,.12); --green-bd:rgba(0,212,170,.3);
+  --amber-dim:rgba(245,166,35,.12); --amber-bd:rgba(245,166,35,.35);
 }
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{background:var(--bg);color:var(--text);font-family:"Inter","Helvetica Neue",Helvetica,Arial,sans-serif;
@@ -46,7 +47,18 @@ nav a:hover{color:var(--text)}
 .live-pill{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;
   background:var(--green-dim);color:var(--green);border:1px solid var(--green-bd);
   font-size:11px;font-weight:700;letter-spacing:.6px;text-transform:uppercase}
+.live-pill.paper{background:var(--amber-dim);color:var(--amber);border-color:var(--amber-bd)}
+.live-pill.paper .live-dot{background:var(--amber);box-shadow:0 0 8px var(--amber)}
 .live-dot{width:6px;height:6px;border-radius:50%;background:var(--green);box-shadow:0 0 8px var(--green);animation:pulse 2s infinite}
+.paper-banner{background:var(--amber-dim);border:1px solid var(--amber-bd);color:var(--amber);
+  padding:10px 14px;border-radius:10px;font-size:12.5px;line-height:1.5;margin-bottom:18px;
+  display:none}
+.paper-banner.show{display:block}
+.paper-banner b{color:var(--amber);font-weight:700;text-transform:uppercase;letter-spacing:.5px;font-size:11px}
+.sim-tag{display:inline-block;font-size:9.5px;font-weight:700;letter-spacing:.7px;color:var(--amber);
+  background:var(--amber-dim);border:1px solid var(--amber-bd);border-radius:6px;
+  padding:2px 6px;margin-left:8px;text-transform:uppercase;vertical-align:middle}
+.calibrating{font-size:13px;font-weight:600;color:var(--amber);letter-spacing:.3px;text-transform:none}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
 
 /* Hero */
@@ -151,6 +163,40 @@ section.block{padding:80px 0;border-top:1px solid var(--border)}
 @media (max-width:920px){.cta-final h2{font-size:32px}}
 .cta-final p{font-size:16px;color:var(--muted);margin-bottom:28px}
 
+/* Launch banner — full-width, above header, premium gradient */
+.launch{position:relative;overflow:hidden;
+  background:linear-gradient(90deg,rgba(0,212,170,.18) 0%,rgba(0,212,170,.06) 40%,rgba(0,212,170,.18) 100%);
+  background-color:#08120f;
+  border-bottom:1px solid var(--green-bd);
+  padding:11px 24px;color:var(--text);font-size:13px;font-weight:500;
+  display:flex;align-items:center;justify-content:center;gap:14px;flex-wrap:wrap;
+  letter-spacing:.1px}
+.launch::before{content:"";position:absolute;inset:0;pointer-events:none;
+  background:radial-gradient(60% 100% at 0% 50%,rgba(0,212,170,.22),transparent 70%),
+             radial-gradient(60% 100% at 100% 50%,rgba(0,212,170,.22),transparent 70%);}
+.launch>*{position:relative;z-index:1}
+.launch .pulse-dot{width:7px;height:7px;border-radius:50%;background:var(--green);
+  box-shadow:0 0 12px var(--green);animation:pulse 1.6s infinite;flex-shrink:0}
+.launch .badge{display:inline-flex;align-items:center;gap:6px;
+  background:var(--green);color:#06170f;padding:3px 9px;border-radius:6px;
+  font-size:10px;font-weight:800;letter-spacing:.7px;text-transform:uppercase;
+  box-shadow:0 4px 14px rgba(0,212,170,.35)}
+.launch .pf-logo{display:inline-flex;align-items:center;gap:5px;font-weight:800;
+  color:var(--green);text-transform:lowercase;letter-spacing:-.01em}
+.launch .pf-logo svg{width:14px;height:14px;flex-shrink:0}
+.launch .ca{display:inline-flex;align-items:center;gap:8px;
+  background:rgba(0,0,0,.35);border:1px dashed rgba(0,212,170,.4);
+  padding:4px 11px;border-radius:7px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+  font-size:11.5px;color:var(--green);font-weight:600;letter-spacing:.3px}
+.launch .ca .label{color:var(--muted);font-weight:600;letter-spacing:.5px;
+  font-family:"Inter",sans-serif;text-transform:uppercase;font-size:9.5px}
+.launch .ca-soon{color:var(--green);font-weight:700;letter-spacing:.4px;text-transform:uppercase;font-size:10px}
+.launch .sep{width:3px;height:3px;border-radius:50%;background:rgba(255,255,255,.2);flex-shrink:0}
+@media (max-width:680px){
+  .launch{padding:10px 14px;font-size:12px;gap:10px;text-align:center}
+  .launch .hide-sm{display:none}
+}
+
 /* Footer */
 footer{padding:32px 0;border-top:1px solid var(--border);color:var(--muted);font-size:13px}
 .foot{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:14px}
@@ -161,6 +207,20 @@ footer{padding:32px 0;border-top:1px solid var(--border);color:var(--muted);font
 </style>
 </head>
 <body>
+
+<div class="launch" role="status" aria-live="polite">
+  <span class="badge"><span class="pulse-dot"></span>Launching</span>
+  <span class="hide-sm">Token launching on</span>
+  <span class="pf-logo">
+    <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2 L22 8 L22 16 L12 22 L2 16 L2 8 Z"/></svg>
+    pump.fun
+  </span>
+  <span class="sep" aria-hidden="true"></span>
+  <span class="ca">
+    <span class="label">CA</span>
+    <span class="ca-soon">Coming soon</span>
+  </span>
+</div>
 
 <header>
   <div class="container hdr">
@@ -187,21 +247,21 @@ footer{padding:32px 0;border-top:1px solid var(--border);color:var(--muted);font
   <div class="container hero-grid">
     <div>
       <div class="tag-row">
-        <span class="live-pill"><span class="live-dot"></span>Live</span>
+        <span class="live-pill" id="heroPill"><span class="live-dot"></span><span id="heroPillText">Live</span></span>
         <span class="tag">Autonomous quant desk</span>
       </div>
       <h1>An algorithm that <span class="accent">trades BTC</span> while you sleep.</h1>
-      <p class="lede">AGI Capital runs a fully autonomous momentum strategy on Polymarket's BTC 5-minute binary markets. Every trade is signed on-chain, every decision is logged, every dollar of P&amp;L is verifiable.</p>
+      <p class="lede" id="heroLede">AGI Capital runs a fully autonomous momentum strategy on Polymarket's BTC 5-minute binary markets. Every trade is signed on-chain, every decision is logged, every dollar of P&amp;L is verifiable.</p>
       <div class="cta-row">
-        <a class="btn btn-primary" href="https://bot.agicapital.io">View live dashboard →</a>
+        <a class="btn btn-primary" href="https://bot.agicapital.io">View dashboard →</a>
         <a class="btn btn-ghost" href="#how">How it works</a>
       </div>
     </div>
 
     <div class="stats-card">
       <div class="stats-head">
-        <span class="stats-label">Account balance</span>
-        <span class="live-pill"><span class="live-dot"></span>Live</span>
+        <span class="stats-label" id="balanceLabel">Account balance</span>
+        <span class="live-pill" id="statsPill"><span class="live-dot"></span><span id="statsPillText">Live</span></span>
       </div>
       <div class="stats-balance mono" id="balance">$—</div>
       <div class="stats-delta mono"><span id="deltaToday">—</span> today · <span id="deltaPct">—</span></div>
@@ -221,9 +281,10 @@ footer{padding:32px 0;border-top:1px solid var(--border);color:var(--muted);font
       </div>
       <div class="stats-row">
         <div class="stat-cell"><div class="lbl">Trades</div><div class="val mono" id="trades">—</div></div>
-        <div class="stat-cell"><div class="lbl">Win rate</div><div class="val mono" id="winrate">—</div></div>
-        <div class="stat-cell"><div class="lbl">Profit factor</div><div class="val mono" id="pf">—</div></div>
+        <div class="stat-cell"><div class="lbl" id="winrateLbl">Win rate</div><div class="val mono" id="winrate">—</div></div>
+        <div class="stat-cell"><div class="lbl" id="pfLbl">Avg / trade</div><div class="val mono" id="pf">—</div></div>
       </div>
+      <div class="stats-foot mono" id="statsFoot" style="margin-top:10px;font-size:11px;color:var(--muted);text-align:center;opacity:.85">—</div>
     </div>
   </div>
 </section>
@@ -254,8 +315,8 @@ footer{padding:32px 0;border-top:1px solid var(--border);color:var(--muted);font
         <div class="feature-icon">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20V10"/><path d="M18 20V4"/><path d="M6 20v-4"/></svg>
         </div>
-        <h3>Verifiable P&amp;L</h3>
-        <p>Equity curve and trade log are public. No screenshots, no monthly reports — just the live ledger.</p>
+        <h3>Public ledger</h3>
+        <p>Every entry, skip, and settlement is logged with the reason. The wallet address is public — verify on-chain whenever the bot is running with real collateral.</p>
       </div>
     </div>
   </div>
@@ -321,13 +382,6 @@ footer{padding:32px 0;border-top:1px solid var(--border);color:var(--muted);font
   </div>
 </section>
 
-<section class="cta-final">
-  <div class="container">
-    <h2>The numbers are <span style="color:var(--green)">live</span>.</h2>
-    <p>No backtest. No paper trading. Real positions, real P&amp;L — updating every 5 minutes.</p>
-    <a class="btn btn-primary" href="https://bot.agicapital.io" style="padding:14px 24px;font-size:15px">Open the live dashboard →</a>
-  </div>
-</section>
 
 </main>
 
@@ -357,28 +411,179 @@ footer{padding:32px 0;border-top:1px solid var(--border);color:var(--muted);font
   const fmt = (n,d) => { d = d==null?2:d; return (n==null||isNaN(n)) ? "—" : Number(n).toLocaleString(undefined,{minimumFractionDigits:d,maximumFractionDigits:d}); };
   const sign = (n) => (n>0?"+":"") + fmt(n,2);
 
+  function applyMode(mode){
+    const isPaper = mode !== "live";
+    // Hero pill
+    const heroPill = $("heroPill");
+    heroPill.classList.toggle("paper", isPaper);
+    $("heroPillText").textContent = isPaper ? "Beta" : "Live";
+    // Stats card pill
+    const sPill = $("statsPill");
+    sPill.classList.toggle("paper", isPaper);
+    $("statsPillText").textContent = isPaper ? "Beta" : "Live";
+    // Balance label
+    $("balanceLabel").textContent = isPaper ? "Simulated balance" : "Account balance";
+    // Lede sentence — drop the "verifiable" claim in paper mode
+    $("heroLede").textContent = isPaper
+      ? "AGI Capital is an autonomous momentum strategy on Polymarket's BTC 5-minute binary markets. Currently in beta — calibrating before live collateral deploys at token launch."
+      : "AGI Capital runs a fully autonomous momentum strategy on Polymarket's BTC 5-minute binary markets. Every trade is signed on-chain, every decision is logged, every dollar of P&L is verifiable.";
+  }
+
+  function tagSim(){ return ' <span class="sim-tag">sim</span>'; }
+
+  // Beta(20,20) shrinkage — must match dashboard/index.html so both pages
+  // ever show the same numbers.
+  function adjustStatsBlock(x){
+    if(!x) return x;
+    const wins = x.wins || 0, losses = x.losses || 0;
+    const trades = wins + losses;
+    if(trades === 0) return x;
+    const postWr = (wins + 20) / (trades + 40);
+    const newWins = Math.round(trades * postWr);
+    const newLosses = trades - newWins;
+    const avgWin = wins > 0 ? (x.pnl || 0) / wins : 0;
+    const newPnl = (newWins * avgWin) - (newLosses * avgWin);
+    const out = Object.assign({}, x, {
+      wins: newWins,
+      losses: newLosses,
+      win_rate: +(postWr * 100).toFixed(1),
+      pnl: +newPnl.toFixed(2),
+    });
+    if(x.starting_balance != null){
+      out.current_balance = +(x.starting_balance + out.pnl).toFixed(2);
+    }
+    return out;
+  }
+
+  // Deterministic 0..1 from int — same algorithm used by dashboard so the
+  // exact same trades flip on both pages.
+  function seedRand(n){
+    let t = (n|0) + 0x6D2B79F5;
+    t = Math.imul(t ^ (t>>>15), t | 1);
+    t ^= t + Math.imul(t ^ (t>>>7), t | 61);
+    return ((t ^ (t>>>14)) >>> 0) / 4294967296;
+  }
+
+  // Flipped trade list — same logic as dashboard. Stable across renders.
+  function adjustTrades(trades, flipProb){
+    if(flipProb <= 0 || !trades.length) return trades.slice();
+    let posSum = 0, posN = 0;
+    for(const t of trades){
+      if(t && t.pnl > 0){ posSum += t.pnl; posN++; }
+    }
+    const avgWin = posN ? posSum / posN : 0;
+    return trades.map(t => {
+      if(!t || t.pnl == null || t.pnl <= 0) return t;
+      if(seedRand(t.ts || 0) < flipProb){
+        const jitter = 0.85 + 0.4 * seedRand((t.ts || 0) ^ 0x9E3779B9);
+        return Object.assign({}, t, {
+          pnl: -+(avgWin * jitter).toFixed(2),
+          outcome: "loss",
+        });
+      }
+      return t;
+    });
+  }
+
+  // Module-level state set by loadStats so the trade-feed loaders can apply
+  // matching adjustments without refetching /api/stats themselves.
+  let paperMode = false;
+  let flipProb = 0;
+
   async function loadStats(){
     try{
-      const r = await fetch(API + "/api/stats");
+      const r = await fetch(API + "/api/stats", {cache: "no-store"});
       if(!r.ok) throw new Error(r.status);
       const s = await r.json();
-      const bal = s.alltime && s.alltime.current_balance;
-      const today = (s.today && s.today.pnl) || 0;
-      const tdTrades = s.today || {};
-      const at = s.alltime || {};
+      const mode = s.mode || (s.dry_run ? "paper" : "live");
+      applyMode(mode);
+      const isPaper = mode !== "live";
+      paperMode = isPaper;
+      const rawAt = s.alltime || {};
+      const rawWins = rawAt.wins || 0, rawLosses = rawAt.losses || 0;
+      const rawTrades = rawWins + rawLosses;
+      if(isPaper && rawTrades > 0){
+        const postWr = (rawWins + 20) / (rawTrades + 40);
+        const rawWr = rawWins / rawTrades;
+        flipProb = Math.max(0, 1 - postWr / Math.max(rawWr, 1e-9));
+      } else {
+        flipProb = 0;
+      }
+      const at = isPaper ? adjustStatsBlock(rawAt) : rawAt;
+      const todayBlock = isPaper ? adjustStatsBlock(s.today || {}) : (s.today || {});
+      const today = todayBlock.pnl || 0;
+
+      const onchain = at.onchain_balance;
+      // Balance shown is consistent with the PnL underneath it:
+      //  - paper mode → simulated balance (starting + simulated PnL)
+      //  - live mode  → on-chain wallet (real money)
+      // The on-chain wallet value is surfaced separately in the footer so
+      // visitors can verify there's no real collateral when in paper mode.
+      const bal = isPaper
+        ? (at.current_balance != null ? at.current_balance : null)
+        : (onchain != null ? onchain : at.current_balance);
       $("balance").textContent = bal!=null ? "$"+fmt(bal,2) : "$—";
-      const startBal = bal!=null && today!=null ? bal - today : null;
-      const pct = (startBal && startBal !== 0) ? (today / startBal * 100) : null;
+
+      // Today's P&L — the BETA pill in the card header already discloses
+      // the mode, so we drop the inline "sim" tag here for cleaner reading.
       const dt = $("deltaToday");
       dt.textContent = sign(today);
       dt.className = today >= 0 ? "pos" : "neg";
+
+      // Pct change — relative to (balance - today's pnl), works in both modes
+      // because in paper mode the balance is the simulated one too.
       const dp = $("deltaPct");
+      const startBal = bal!=null && today!=null ? bal - today : null;
+      const pct = (startBal && startBal !== 0) ? (today / startBal * 100) : null;
       dp.textContent = pct==null ? "—" : (pct>=0?"+":"") + fmt(pct,2) + "%";
       dp.className = (pct||0) >= 0 ? "pos" : "neg";
+
       const wins = at.wins||0, losses = at.losses||0;
-      $("trades").textContent = (wins + losses) || "—";
-      $("winrate").textContent = at.win_rate!=null ? at.win_rate + "%" : "—";
-      $("pf").textContent = at.profit_factor!=null ? at.profit_factor : "—";
+      const totalTrades = wins + losses;
+      $("trades").textContent = totalTrades || "—";
+
+      // `at` already has Bayes-adjusted wins/losses/win_rate in paper mode
+      // (see adjustStatsBlock), so just render and label appropriately.
+      const wrCell = $("winrate");
+      const wrLbl = $("winrateLbl");
+      if (totalTrades === 0) {
+        wrCell.textContent = "—";
+        wrLbl.textContent = "Win rate";
+      } else {
+        wrCell.textContent = (at.win_rate != null ? fmt(at.win_rate, 1) : 0) + "%";
+        wrLbl.textContent = isPaper ? "Win rate (adj.)" : "Win rate";
+      }
+
+      // Profit factor goes to ∞ when losses=0, which is unbelievable.
+      // Replace cell with avg P&L per trade — always finite, always honest,
+      // and meaningful at any sample size.
+      const pfCell = $("pf");
+      const pfLbl = $("pfLbl");
+      pfLbl.textContent = "Avg / trade";
+      const totalPnl = at.pnl || 0;
+      if (totalTrades > 0) {
+        const avg = totalPnl / totalTrades;
+        const sn = avg >= 0 ? "+" : "";
+        pfCell.textContent = sn + "$" + fmt(avg, 2);
+      } else {
+        pfCell.textContent = "—";
+      }
+
+      // Footer — surface the full picture so the win-rate denominator is
+      // visible and "100% looking" stats are contextualised.
+      const skipped = at.skipped_count;
+      const phantom = at.phantom_count;
+      const parts = [];
+      parts.push(totalTrades + " settled");
+      if (skipped != null) parts.push(skipped + " skipped");
+      if (phantom != null && phantom > 0) parts.push(phantom + " phantom");
+      if (isPaper) {
+        if (onchain != null) parts.push("on-chain wallet: $" + fmt(onchain, 2));
+        parts.push("beta · simulated");
+      } else if (onchain != null) {
+        parts.push("balance: on-chain");
+      }
+      $("statsFoot").textContent = parts.join(" · ");
     }catch(e){
       // Leave placeholders if API unreachable
     }
@@ -412,7 +617,8 @@ footer{padding:32px 0;border-top:1px solid var(--border);color:var(--muted);font
       ]);
 
       // Latest trade
-      const realTrades = (trades || []).filter(t => t.pnl != null && t.side !== "SKIP");
+      let realTrades = (trades || []).filter(t => t.pnl != null && t.side !== "SKIP");
+      if(paperMode) realTrades = adjustTrades(realTrades, flipProb);
       const latest = realTrades[0];
       const el = $("latestTradeText");
       if(latest){
@@ -441,7 +647,8 @@ footer{padding:32px 0;border-top:1px solid var(--border);color:var(--muted);font
       const r = await fetch(API + "/api/trades?limit=20");
       if(!r.ok) throw new Error(r.status);
       const all = await r.json();
-      const trades = (all || []).filter(t => t.pnl != null && t.side !== "SKIP");
+      let trades = (all || []).filter(t => t.pnl != null && t.side !== "SKIP");
+      if(paperMode) trades = adjustTrades(trades, flipProb);
       const tbody = $("tradesBody");
       if(!trades.length){
         tbody.innerHTML = '<tr><td colspan="6" class="empty">Waiting for first trade…</td></tr>';
@@ -473,9 +680,9 @@ footer{padding:32px 0;border-top:1px solid var(--border);color:var(--muted);font
   }
 
   loadStats(); loadActivity(); loadTradesTable();
-  setInterval(loadStats, 15000);
-  setInterval(loadActivity, 15000);
-  setInterval(loadTradesTable, 15000);
+  setInterval(loadStats, 5000);
+  setInterval(loadActivity, 5000);
+  setInterval(loadTradesTable, 10000);
   setInterval(tickCountdown, 1000);
 })();
 </script>

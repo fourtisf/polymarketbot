@@ -82,7 +82,7 @@ class PnLTracker:
                 "pnl": 0.0,
                 "avg_win": 0.0,
                 "avg_loss": 0.0,
-                "profit_factor": 0.0,
+                "profit_factor": None,
                 "best": 0.0,
                 "worst": 0.0,
             }
@@ -98,7 +98,7 @@ class PnLTracker:
             "pnl": round(sum(t.get("pnl", 0) for t in trades), 2),
             "avg_win": round(total_wins / len(wins), 2) if wins else 0.0,
             "avg_loss": round(-total_losses / len(losses), 2) if losses else 0.0,
-            "profit_factor": round(total_wins / total_losses, 2) if total_losses else (9.99 if wins else 0.0),
+            "profit_factor": round(total_wins / total_losses, 2) if total_losses else None,
             "best": round(max((t["pnl"] for t in trades), default=0), 2),
             "worst": round(min((t["pnl"] for t in trades), default=0), 2),
         }
