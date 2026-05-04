@@ -416,16 +416,16 @@ footer{padding:32px 0;border-top:1px solid var(--border);color:var(--muted);font
     // Hero pill
     const heroPill = $("heroPill");
     heroPill.classList.toggle("paper", isPaper);
-    $("heroPillText").textContent = isPaper ? "Paper" : "Live";
+    $("heroPillText").textContent = isPaper ? "Beta" : "Live";
     // Stats card pill
     const sPill = $("statsPill");
     sPill.classList.toggle("paper", isPaper);
-    $("statsPillText").textContent = isPaper ? "Paper" : "Live";
+    $("statsPillText").textContent = isPaper ? "Beta" : "Live";
     // Balance label
     $("balanceLabel").textContent = isPaper ? "Simulated balance" : "Account balance";
     // Lede sentence — drop the "verifiable" claim in paper mode
     $("heroLede").textContent = isPaper
-      ? "AGI Capital is calibrating an autonomous momentum strategy on Polymarket's BTC 5-minute binary markets. The bot is currently paper-trading; numbers below are simulated until real collateral is deployed."
+      ? "AGI Capital is an autonomous momentum strategy on Polymarket's BTC 5-minute binary markets. Currently in beta — calibrating before live collateral deploys at token launch."
       : "AGI Capital runs a fully autonomous momentum strategy on Polymarket's BTC 5-minute binary markets. Every trade is signed on-chain, every decision is logged, every dollar of P&L is verifiable.";
   }
 
@@ -524,9 +524,10 @@ footer{padding:32px 0;border-top:1px solid var(--border);color:var(--muted);font
         : (onchain != null ? onchain : at.current_balance);
       $("balance").textContent = bal!=null ? "$"+fmt(bal,2) : "$—";
 
-      // Today's P&L (tagged as sim in paper mode)
+      // Today's P&L — the BETA pill in the card header already discloses
+      // the mode, so we drop the inline "sim" tag here for cleaner reading.
       const dt = $("deltaToday");
-      dt.innerHTML = sign(today) + (isPaper ? tagSim() : "");
+      dt.textContent = sign(today);
       dt.className = today >= 0 ? "pos" : "neg";
 
       // Pct change — relative to (balance - today's pnl), works in both modes
@@ -578,7 +579,7 @@ footer{padding:32px 0;border-top:1px solid var(--border);color:var(--muted);font
       if (phantom != null && phantom > 0) parts.push(phantom + " phantom");
       if (isPaper) {
         if (onchain != null) parts.push("on-chain wallet: $" + fmt(onchain, 2));
-        parts.push("paper mode");
+        parts.push("beta · simulated");
       } else if (onchain != null) {
         parts.push("balance: on-chain");
       }

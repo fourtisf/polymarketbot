@@ -529,7 +529,7 @@ tbody tr.skip{color:var(--dim)}
       const isPaper = isPaperMode(s);
       $("statusDot").classList.toggle("off", !!s.paused);
       const mb = $("modeBadge");
-      mb.textContent = isPaper ? "PAPER" : "LIVE";
+      mb.textContent = isPaper ? "BETA" : "LIVE";
       mb.className = "signal" + (isPaper ? " warn" : "");
 
       const today = isPaper ? adjustStats(s.today) : s.today;
