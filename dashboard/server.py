@@ -86,8 +86,9 @@ class DashboardServer:
         # On-chain balance — source of truth for the displayed balance.
         # Falls back to STARTING_BALANCE+pnl if the RPC fetch fails.
         onchain = await self._get_onchain_balance()
-        if onchain.get("usdc") is not None:
-            alltime["onchain_balance"] = round(onchain["usdc"], 2)
+        onchain_usdc = onchain.get("usdc")
+        if onchain_usdc is not None:
+            alltime["onchain_balance"] = round(onchain_usdc, 2)
             alltime["onchain_balance_ts"] = onchain.get("ts")
 
         # Transparency counts: skipped windows + phantom (unfilled CLOB) trades
@@ -96,6 +97,12 @@ class DashboardServer:
         alltime["skipped_count"] = counts["skipped"]
         alltime["phantom_count"] = counts["phantom"]
 
+        # Mode: "live" only when bot is not in dry-run AND wallet has real
+        # collateral. Otherwise "paper" so the UI can disclose honestly.
+        dry = bool(config.RUNTIME.dry_run)
+        has_real_money = onchain_usdc is not None and onchain_usdc >= 1.0
+        mode = "live" if (not dry and has_real_money) else "paper"
+
         return web.json_response({
             "today": today,
             "week": week,
@@ -103,7 +110,8 @@ class DashboardServer:
             "streak": self.pnl.current_streak(),
             "risk": self.risk.snapshot(),
             "paused": config.RUNTIME.paused,
-            "dry_run": config.RUNTIME.dry_run,
+            "dry_run": dry,
+            "mode": mode,
         })
 
     async def _get_onchain_balance(self) -> Dict[str, Any]:

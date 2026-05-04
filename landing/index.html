@@ -13,8 +13,9 @@
 :root{
   --bg:#0a0a0f; --card:#12121a; --border:rgba(255,255,255,.08);
   --text:#e6e7ea; --muted:#8b8e99; --dim:#5a5e6b;
-  --green:#00d4aa; --red:#ff4757;
+  --green:#00d4aa; --red:#ff4757; --amber:#f5a623;
   --green-dim:rgba(0,212,170,.12); --green-bd:rgba(0,212,170,.3);
+  --amber-dim:rgba(245,166,35,.12); --amber-bd:rgba(245,166,35,.35);
 }
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{background:var(--bg);color:var(--text);font-family:"Inter","Helvetica Neue",Helvetica,Arial,sans-serif;
@@ -46,7 +47,17 @@ nav a:hover{color:var(--text)}
 .live-pill{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;
   background:var(--green-dim);color:var(--green);border:1px solid var(--green-bd);
   font-size:11px;font-weight:700;letter-spacing:.6px;text-transform:uppercase}
+.live-pill.paper{background:var(--amber-dim);color:var(--amber);border-color:var(--amber-bd)}
+.live-pill.paper .live-dot{background:var(--amber);box-shadow:0 0 8px var(--amber)}
 .live-dot{width:6px;height:6px;border-radius:50%;background:var(--green);box-shadow:0 0 8px var(--green);animation:pulse 2s infinite}
+.paper-banner{background:var(--amber-dim);border:1px solid var(--amber-bd);color:var(--amber);
+  padding:10px 14px;border-radius:10px;font-size:12.5px;line-height:1.5;margin-bottom:18px;
+  display:none}
+.paper-banner.show{display:block}
+.paper-banner b{color:var(--amber);font-weight:700;text-transform:uppercase;letter-spacing:.5px;font-size:11px}
+.sim-tag{display:inline-block;font-size:9.5px;font-weight:700;letter-spacing:.7px;color:var(--amber);
+  background:var(--amber-dim);border:1px solid var(--amber-bd);border-radius:6px;
+  padding:2px 6px;margin-left:8px;text-transform:uppercase;vertical-align:middle}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
 
 /* Hero */
@@ -187,21 +198,27 @@ footer{padding:32px 0;border-top:1px solid var(--border);color:var(--muted);font
   <div class="container hero-grid">
     <div>
       <div class="tag-row">
-        <span class="live-pill"><span class="live-dot"></span>Live</span>
+        <span class="live-pill" id="heroPill"><span class="live-dot"></span><span id="heroPillText">Live</span></span>
         <span class="tag">Autonomous quant desk</span>
       </div>
       <h1>An algorithm that <span class="accent">trades BTC</span> while you sleep.</h1>
-      <p class="lede">AGI Capital runs a fully autonomous momentum strategy on Polymarket's BTC 5-minute binary markets. Every trade is signed on-chain, every decision is logged, every dollar of P&amp;L is verifiable.</p>
+      <p class="lede" id="heroLede">AGI Capital runs a fully autonomous momentum strategy on Polymarket's BTC 5-minute binary markets. Every trade is signed on-chain, every decision is logged, every dollar of P&amp;L is verifiable.</p>
       <div class="cta-row">
-        <a class="btn btn-primary" href="https://bot.agicapital.io">View live dashboard →</a>
+        <a class="btn btn-primary" href="https://bot.agicapital.io">View dashboard →</a>
         <a class="btn btn-ghost" href="#how">How it works</a>
       </div>
     </div>
 
     <div class="stats-card">
+      <div class="paper-banner" id="paperBanner">
+        <b>Paper trading mode</b><br>
+        Bot is running in dry-run / no real collateral on-chain. The numbers
+        below are simulated and may not reflect real-market slippage, fees,
+        or fill probability. Treat as a calibration metric, not a track record.
+      </div>
       <div class="stats-head">
-        <span class="stats-label">Account balance</span>
-        <span class="live-pill"><span class="live-dot"></span>Live</span>
+        <span class="stats-label" id="balanceLabel">Account balance</span>
+        <span class="live-pill" id="statsPill"><span class="live-dot"></span><span id="statsPillText">Live</span></span>
       </div>
       <div class="stats-balance mono" id="balance">$—</div>
       <div class="stats-delta mono"><span id="deltaToday">—</span> today · <span id="deltaPct">—</span></div>
@@ -255,8 +272,8 @@ footer{padding:32px 0;border-top:1px solid var(--border);color:var(--muted);font
         <div class="feature-icon">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20V10"/><path d="M18 20V4"/><path d="M6 20v-4"/></svg>
         </div>
-        <h3>Verifiable P&amp;L</h3>
-        <p>Equity curve and trade log are public. No screenshots, no monthly reports — just the live ledger.</p>
+        <h3>Public ledger</h3>
+        <p>Every entry, skip, and settlement is logged with the reason. The wallet address is public — verify on-chain whenever the bot is running with real collateral.</p>
       </div>
     </div>
   </div>
@@ -324,8 +341,8 @@ footer{padding:32px 0;border-top:1px solid var(--border);color:var(--muted);font
 
 <section class="cta-final">
   <div class="container">
-    <h2>The numbers are <span style="color:var(--green)">live</span>.</h2>
-    <p>No backtest. No paper trading. Real positions, real P&amp;L — updating every 5 minutes.</p>
+    <h2 id="ctaHeading">The numbers are <span style="color:var(--green)">live</span>.</h2>
+    <p id="ctaSub">Every trade and decision is logged. The full ledger updates every 5 minutes — open the dashboard to inspect it.</p>
     <a class="btn btn-primary" href="https://bot.agicapital.io" style="padding:14px 24px;font-size:15px">Open the live dashboard →</a>
   </div>
 </section>
@@ -358,6 +375,36 @@ footer{padding:32px 0;border-top:1px solid var(--border);color:var(--muted);font
   const fmt = (n,d) => { d = d==null?2:d; return (n==null||isNaN(n)) ? "—" : Number(n).toLocaleString(undefined,{minimumFractionDigits:d,maximumFractionDigits:d}); };
   const sign = (n) => (n>0?"+":"") + fmt(n,2);
 
+  function applyMode(mode){
+    const isPaper = mode !== "live";
+    // Hero pill
+    const heroPill = $("heroPill");
+    heroPill.classList.toggle("paper", isPaper);
+    $("heroPillText").textContent = isPaper ? "Paper" : "Live";
+    // Stats card pill
+    const sPill = $("statsPill");
+    sPill.classList.toggle("paper", isPaper);
+    $("statsPillText").textContent = isPaper ? "Paper" : "Live";
+    // Banner inside stats card
+    $("paperBanner").classList.toggle("show", isPaper);
+    // Balance label
+    $("balanceLabel").textContent = isPaper ? "Simulated balance" : "Account balance";
+    // CTA copy
+    if(isPaper){
+      $("ctaHeading").innerHTML = 'Currently in <span style="color:var(--amber)">calibration</span>.';
+      $("ctaSub").textContent = "The bot is running in paper mode while the strategy is being validated. The dashboard shows simulated P&L, not real trading performance.";
+    }else{
+      $("ctaHeading").innerHTML = 'The numbers are <span style="color:var(--green)">live</span>.';
+      $("ctaSub").textContent = "Every trade and decision is logged. The full ledger updates every 5 minutes — open the dashboard to inspect it.";
+    }
+    // Lede sentence — drop the "verifiable" claim in paper mode
+    $("heroLede").textContent = isPaper
+      ? "AGI Capital is calibrating an autonomous momentum strategy on Polymarket's BTC 5-minute binary markets. The bot is currently paper-trading; numbers below are simulated until real collateral is deployed."
+      : "AGI Capital runs a fully autonomous momentum strategy on Polymarket's BTC 5-minute binary markets. Every trade is signed on-chain, every decision is logged, every dollar of P&L is verifiable.";
+  }
+
+  function tagSim(){ return ' <span class="sim-tag">sim</span>'; }
+
   async function loadStats(){
     try{
       const r = await fetch(API + "/api/stats", {cache: "no-store"});
@@ -365,37 +412,66 @@ footer{padding:32px 0;border-top:1px solid var(--border);color:var(--muted);font
       const s = await r.json();
       const at = s.alltime || {};
       const today = (s.today && s.today.pnl) || 0;
-      // Prefer real on-chain wallet balance over computed (start + pnl).
+      const mode = s.mode || (s.dry_run ? "paper" : "live");
+      applyMode(mode);
+      const isPaper = mode !== "live";
+
       const onchain = at.onchain_balance;
-      const bal = onchain != null ? onchain : at.current_balance;
+      // In paper mode the source of truth is the on-chain wallet (which is
+      // probably ~$0). Don't show the inflated "starting + simulated pnl"
+      // figure as if it were a real balance.
+      const bal = isPaper
+        ? (onchain != null ? onchain : 0)
+        : (onchain != null ? onchain : at.current_balance);
       $("balance").textContent = bal!=null ? "$"+fmt(bal,2) : "$—";
-      const startBal = bal!=null && today!=null ? bal - today : null;
-      const pct = (startBal && startBal !== 0) ? (today / startBal * 100) : null;
+
+      // Today's P&L: in paper mode it is simulated, label it.
       const dt = $("deltaToday");
-      dt.textContent = sign(today);
+      dt.innerHTML = sign(today) + (isPaper ? tagSim() : "");
       dt.className = today >= 0 ? "pos" : "neg";
+
+      // Pct change — only meaningful when the balance is real money.
       const dp = $("deltaPct");
-      dp.textContent = pct==null ? "—" : (pct>=0?"+":"") + fmt(pct,2) + "%";
-      dp.className = (pct||0) >= 0 ? "pos" : "neg";
+      if(isPaper){
+        dp.textContent = "—";
+        dp.className = "";
+      }else{
+        const startBal = bal!=null && today!=null ? bal - today : null;
+        const pct = (startBal && startBal !== 0) ? (today / startBal * 100) : null;
+        dp.textContent = pct==null ? "—" : (pct>=0?"+":"") + fmt(pct,2) + "%";
+        dp.className = (pct||0) >= 0 ? "pos" : "neg";
+      }
+
       const wins = at.wins||0, losses = at.losses||0;
       const totalTrades = wins + losses;
       $("trades").textContent = totalTrades || "—";
-      $("winrate").textContent = at.win_rate!=null && totalTrades > 0 ? at.win_rate + "%" : "—";
-      // profit_factor is null when there are zero losses — show ∞ instead of
-      // a fake fixed number so the math is honest.
+
+      // Honest win-rate display: hide pristine 100% on small samples — that
+      // is almost always simulator bias, not skill. Show "—" with the
+      // sample size in the footer instead.
+      const wr = at.win_rate;
+      const lowSample = totalTrades < 500;
+      const suspicious = wr != null && wr >= 95 && lowSample;
+      $("winrate").textContent = (wr != null && totalTrades > 0 && !suspicious)
+        ? wr + "%"
+        : "—";
+
       const pfVal = at.profit_factor;
       $("pf").textContent = pfVal == null
-        ? (wins > 0 && losses === 0 ? "∞" : "—")
+        ? (wins > 0 && losses === 0 ? "—" : "—")
         : fmt(pfVal, 2);
-      // Transparency footer — surface skipped + phantom counts so visitors
-      // can see the full denominator, not just the filtered one.
+
+      // Footer — surface the full picture so the win-rate denominator is
+      // visible and "100% looking" stats are contextualised.
       const skipped = at.skipped_count;
       const phantom = at.phantom_count;
       const parts = [];
       parts.push(totalTrades + " settled");
       if (skipped != null) parts.push(skipped + " skipped");
       if (phantom != null && phantom > 0) parts.push(phantom + " phantom");
-      if (onchain != null) parts.push("balance: on-chain");
+      if (suspicious) parts.push("sample too small to validate win rate");
+      if (isPaper) parts.push("paper mode");
+      else if (onchain != null) parts.push("balance: on-chain");
       $("statsFoot").textContent = parts.join(" · ");
     }catch(e){
       // Leave placeholders if API unreachable
