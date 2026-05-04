@@ -417,30 +417,28 @@ footer{padding:32px 0;border-top:1px solid var(--border);color:var(--muted);font
       const isPaper = mode !== "live";
 
       const onchain = at.onchain_balance;
-      // In paper mode the source of truth is the on-chain wallet (which is
-      // probably ~$0). Don't show the inflated "starting + simulated pnl"
-      // figure as if it were a real balance.
+      // Balance shown is consistent with the PnL underneath it:
+      //  - paper mode → simulated balance (starting + simulated PnL)
+      //  - live mode  → on-chain wallet (real money)
+      // The on-chain wallet value is surfaced separately in the footer so
+      // visitors can verify there's no real collateral when in paper mode.
       const bal = isPaper
-        ? (onchain != null ? onchain : 0)
+        ? (at.current_balance != null ? at.current_balance : null)
         : (onchain != null ? onchain : at.current_balance);
       $("balance").textContent = bal!=null ? "$"+fmt(bal,2) : "$—";
 
-      // Today's P&L: in paper mode it is simulated, label it.
+      // Today's P&L (tagged as sim in paper mode)
       const dt = $("deltaToday");
       dt.innerHTML = sign(today) + (isPaper ? tagSim() : "");
       dt.className = today >= 0 ? "pos" : "neg";
 
-      // Pct change — only meaningful when the balance is real money.
+      // Pct change — relative to (balance - today's pnl), works in both modes
+      // because in paper mode the balance is the simulated one too.
       const dp = $("deltaPct");
-      if(isPaper){
-        dp.textContent = "—";
-        dp.className = "";
-      }else{
-        const startBal = bal!=null && today!=null ? bal - today : null;
-        const pct = (startBal && startBal !== 0) ? (today / startBal * 100) : null;
-        dp.textContent = pct==null ? "—" : (pct>=0?"+":"") + fmt(pct,2) + "%";
-        dp.className = (pct||0) >= 0 ? "pos" : "neg";
-      }
+      const startBal = bal!=null && today!=null ? bal - today : null;
+      const pct = (startBal && startBal !== 0) ? (today / startBal * 100) : null;
+      dp.textContent = pct==null ? "—" : (pct>=0?"+":"") + fmt(pct,2) + "%";
+      dp.className = (pct||0) >= 0 ? "pos" : "neg";
 
       const wins = at.wins||0, losses = at.losses||0;
       const totalTrades = wins + losses;
@@ -470,8 +468,14 @@ footer{padding:32px 0;border-top:1px solid var(--border);color:var(--muted);font
       if (skipped != null) parts.push(skipped + " skipped");
       if (phantom != null && phantom > 0) parts.push(phantom + " phantom");
       if (suspicious) parts.push("sample too small to validate win rate");
-      if (isPaper) parts.push("paper mode");
-      else if (onchain != null) parts.push("balance: on-chain");
+      if (isPaper) {
+        // In paper mode, surface the real on-chain wallet so the gap
+        // between "simulated balance" and actual collateral is visible.
+        if (onchain != null) parts.push("on-chain wallet: $" + fmt(onchain, 2));
+        parts.push("paper mode");
+      } else if (onchain != null) {
+        parts.push("balance: on-chain");
+      }
       $("statsFoot").textContent = parts.join(" · ");
     }catch(e){
       // Leave placeholders if API unreachable
