@@ -444,20 +444,28 @@ footer{padding:32px 0;border-top:1px solid var(--border);color:var(--muted);font
       const totalTrades = wins + losses;
       $("trades").textContent = totalTrades || "—";
 
-      // Honest win-rate display: hide pristine 100% on small samples — that
-      // is almost always simulator bias, not skill. Show "—" with the
-      // sample size in the footer instead.
+      // Show win rate AND profit factor with their real values, but tag them
+      // when the sample is too small to be statistically meaningful, or when
+      // running in paper mode. Don't hide — visitors will think the bot has
+      // no stats. Just make the caveat visible inline.
       const wr = at.win_rate;
       const lowSample = totalTrades < 500;
       const suspicious = wr != null && wr >= 95 && lowSample;
-      $("winrate").textContent = (wr != null && totalTrades > 0 && !suspicious)
-        ? wr + "%"
-        : "—";
+      const wrCell = $("winrate");
+      if (wr == null || totalTrades === 0) {
+        wrCell.textContent = "—";
+      } else {
+        wrCell.innerHTML = wr + "%" + (suspicious || isPaper ? tagSim() : "");
+      }
 
       const pfVal = at.profit_factor;
-      $("pf").textContent = pfVal == null
-        ? (wins > 0 && losses === 0 ? "—" : "—")
-        : fmt(pfVal, 2);
+      const pfCell = $("pf");
+      if (pfVal == null) {
+        // null means losses == 0 → ratio undefined. Show ∞ honestly.
+        pfCell.innerHTML = (wins > 0 ? "∞" : "—") + (isPaper && wins > 0 ? tagSim() : "");
+      } else {
+        pfCell.innerHTML = fmt(pfVal, 2) + (isPaper ? tagSim() : "");
+      }
 
       // Footer — surface the full picture so the win-rate denominator is
       // visible and "100% looking" stats are contextualised.
